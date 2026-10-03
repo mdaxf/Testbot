@@ -1,0 +1,46 @@
+{
+  "suite_id": "SESSION-DEMO-LOGIN",
+  "suite_name": "Login",
+  "environment": "demo",
+  "on_case_fail": "continue",
+  "cases": [
+    {
+      "id": "TC-001",
+      "title": "Successful login shows the secure area",
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Navigate to the login page",
+          "action": "navigate",
+          "target": {"strategy": "url", "value": "{base_url}/login"},
+          "expected": {"type": "url_contains", "value": "/login"}
+        },
+        {
+          "step_no": 2,
+          "description": "Enter the username",
+          "action": "type",
+          "target": {"strategy": "label", "value": "Username"},
+          "input": "tomsmith"
+        },
+        {
+          "step_no": 3,
+          "description": "Enter the password",
+          "action": "type",
+          "target": {"strategy": "label", "value": "Password"},
+          "input": "SuperSecretPassword!"
+        },
+        {
+          "step_no": 4,
+          "description": "Click the Login button",
+          "action": "click",
+          "target": {"strategy": "role", "value": "button", "name": "Login"},
+          "expected": {
+            "type": "text_contains",
+            "value": "You logged into a secure area",
+            "target": {"strategy": "css", "value": "#flash"}
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+# Application profile for DELMIA Apriso 2023+ (Screen Framework): what the AI agent should know about how the application looks.
+# Use it with TESTBOT_AGENT_PROFILE=config/app_profile_apriso.yaml (or Settings -> Agentic testing -> App profile file).
+# Derived from config/apriso_control_map.yaml and the live Production Line Setup screen.
+name: apriso
+frame: ".apr-fullscreen-tab"     # screens render inside this iframe
+popup: ".apr-popup"              # pop-up forms/dialogs: their controls are listed first
+spinner: ".apr-ctspinner"        # wait until this "busy" indicator is gone before looking at the page
+allowed_hosts: []                # the test's base_url host is always allowed; add more hosts here if the application spans several
+notes: |
+  This is DELMIA Apriso (Screen Framework). Conventions:
+  - A screen opens inside an iframe (controls marked @screen). The portal home page has a search box; type a screen name, then open the first search result.
+  - Grids ("DynamicGrid") list their rows under TABLES; the first row is an empty placeholder and is already skipped. Rows alternate white / light grey.
+    Toolbar buttons above a grid are identified by a data-key (for example ADDPRODUCTIONLINE) and their visible text may be empty.
+  - "Add" style buttons open a pop-up form; work inside the pop-up (controls marked [popup]) and close it with OK or CANCEL before using the screen behind it.
+  - Form fields are named after their Apriso field (for example ProductionLineNo, WorkCenter, Description). Dropdown-like fields may be type-ahead text boxes: type the value.
+  - Saving is asynchronous: after OK, wait for the busy indicator to clear (the tools do this for you), then verify the result in the grid and, if a database
+    connection is available, in the database (for example table WIP_LINE for production lines).
+  - Apriso limits concurrent users on some installations: always finish the test by logging out if you logged in (user menu at the top right, then Log out).
+  - Names of test data should be unique per run: use {run_id}, for example TEST_{run_id}.
+  - Logging in (Apriso 2023): the portal address (.../apriso/portal) first shows a "Start" page that asks for a login method: open the link
+    "Standard Login". The next page has a name/badge field and a password field and a "Log In" button. Afterwards the portal may show a
+    "Portal Error" page once: use its "Go Back to Portal" link (or open .../apriso/apriso). The portal home page has a search box ("Find a screen...").
+    Type the screen name there, wait for the result list, and open the first result (it may appear as plain text in the list, not as a button).
+  - To log out: open the user menu at the top of the portal (it shows the logged-in user name) and choose Log out. If a screen covers the header, leave the screen first.

@@ -1,0 +1,108 @@
+{
+  "suite_id": "REST-BUS-001",
+  "suite_name": "REST + message bus demo",
+  "variables": {
+    "api": {
+      "source": "constant",
+      "value": "https://httpbin.org"
+    },
+    "broker_host": {
+      "source": "constant",
+      "value": "localhost"
+    }
+  },
+  "on_case_fail": "continue",
+  "cases": [
+    {
+      "id": "TC-REST-001",
+      "title": "POST then GET a record over REST",
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "POST an order",
+          "action": "rest_call",
+          "config": {
+            "url": "{api}/post",
+            "method": "POST",
+            "body": {
+              "item": "A-100",
+              "qty": 2
+            },
+            "expect_status": 200,
+            "expect_json": {
+              "json.item": "A-100"
+            },
+            "capture": {
+              "echoed_qty": "json.qty"
+            }
+          }
+        },
+        {
+          "step_no": 2,
+          "description": "GET it back with the captured qty as a query param",
+          "action": "rest_call",
+          "config": {
+            "url": "{api}/get",
+            "params": {
+              "qty": "{echoed_qty}"
+            },
+            "expect_status": 200,
+            "expect_json": {
+              "args.qty": "2"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "TC-BUS-001",
+      "title": "Publish to MQTT and receive it on a subscription",
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Subscribe before triggering",
+          "action": "bus_subscribe",
+          "config": {
+            "broker": "mqtt",
+            "name": "orders",
+            "host": "{broker_host}",
+            "topic": "plant/+/orders"
+          }
+        },
+        {
+          "step_no": 2,
+          "description": "Trigger the event (could equally be a UI click or rest_call)",
+          "action": "bus_publish",
+          "config": {
+            "broker": "mqtt",
+            "host": "{broker_host}",
+            "topic": "plant/line1/orders",
+            "payload": {
+              "orderNo": "WO-1001",
+              "status": "Released"
+            }
+          }
+        },
+        {
+          "step_no": 3,
+          "description": "Wait for the Released message for WO-1001",
+          "action": "bus_wait",
+          "timeout_ms": 15000,
+          "config": {
+            "name": "orders",
+            "match": {
+              "orderNo": "WO-1001"
+            },
+            "expect_json": {
+              "status": "Released"
+            },
+            "capture": {
+              "order_status": "status",
+              "src_topic": "$topic"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

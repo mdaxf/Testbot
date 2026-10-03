@@ -1,0 +1,75 @@
+{
+  "suite_id": "SCAN-DEMO",
+  "suite_name": "Scan into whatever field the screen focused, then verify the required field got it",
+  "environment": "demo",
+  "on_case_fail": "continue",
+  "cases": [
+    {
+      "id": "TC-201",
+      "title": "Scanned code lands in the required field without the step naming it",
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Navigate to the login page",
+          "action": "navigate",
+          "target": {"strategy": "url", "value": "{base_url}/login"}
+        },
+        {
+          "step_no": 2,
+          "description": "Screen puts focus on the required field (Username) -- on a real Apriso screen this happens automatically on load; simulated here with a click",
+          "action": "click",
+          "target": {"strategy": "label", "value": "Username"}
+        },
+        {
+          "step_no": 3,
+          "description": "Scan the code -- no target: it goes wherever the screen put focus, exactly like a real barcode scanner",
+          "action": "scan",
+          "input": "tomsmith"
+        },
+        {
+          "step_no": 4,
+          "description": "Verify the required field (Username) actually received the scanned value",
+          "action": "assert",
+          "expected": {
+            "type": "value_equals",
+            "value": "tomsmith",
+            "target": {"strategy": "label", "value": "Username"}
+          }
+        },
+        {
+          "step_no": 5,
+          "description": "Screen moves focus to the next required field (Password)",
+          "action": "click",
+          "target": {"strategy": "label", "value": "Password"}
+        },
+        {
+          "step_no": 6,
+          "description": "Scan the second code -- again no target",
+          "action": "scan",
+          "input": "SuperSecretPassword!"
+        },
+        {
+          "step_no": 7,
+          "description": "Verify the Password field received it",
+          "action": "assert",
+          "expected": {
+            "type": "value_equals",
+            "value": "SuperSecretPassword!",
+            "target": {"strategy": "label", "value": "Password"}
+          }
+        },
+        {
+          "step_no": 8,
+          "description": "Submit and confirm login succeeded with the scanned credentials",
+          "action": "click",
+          "target": {"strategy": "role", "value": "button", "name": "Login"},
+          "expected": {
+            "type": "text_contains",
+            "value": "You logged into a secure area",
+            "target": {"strategy": "css", "value": "#flash"}
+          }
+        }
+      ]
+    }
+  ]
+}

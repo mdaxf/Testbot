@@ -1,0 +1,476 @@
+{
+  "suite_id": "AD-DEMO-APPROVAL",
+  "suite_name": "AD_demo: launch dashboard, approve AI action, multi-user multi-stage approval",
+  "environment": "ad_demo_portal",
+  "on_case_fail": "continue",
+  "default_step_delay_ms": 9000,
+  "cases": [
+    {
+      "id": "TC-001",
+      "title": "Requester launches the Engineering dashboard and approves the AI-recommended PLM/BOM Change Impact action",
+      "area_path": "AD_demo/ApprovalWorkflow",
+      "priority": 1,
+      "preconditions": "mom-mcp (8787, serving its own embedded Studio at /admin/studio -- or whatever --env ad_demo_portal points at) is running; AD_demo's and_engineering dashboard action_panel widget recommends plm-bom-change-impact (gated by the engineering_change_approval policy: stage 1 = engineering, stage 2 = program_manager); ad_requester holds only the 'executive' role (can view the dashboard, cannot approve either stage).",
+      "variables": {
+        "Tenant": {
+          "source": "constant",
+          "value": "AD_demo"
+        },
+        "RequesterUsername": {
+          "source": "constant",
+          "value": "ad_requester"
+        },
+        "RequesterPassword": {
+          "source": "constant",
+          "value": "TestPass123!"
+        },
+        "EngineerUsername": {
+          "source": "constant",
+          "value": "ad_engineer"
+        },
+        "EngineerPassword": {
+          "source": "constant",
+          "value": "TestPass123!"
+        },
+        "PmUsername": {
+          "source": "constant",
+          "value": "ad_pm"
+        },
+        "PmPassword": {
+          "source": "constant",
+          "value": "TestPass123!"
+        }
+      },
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Open the Portal login page",
+          "action": "navigate",
+          "target": {
+            "strategy": "url",
+            "value": "{base_url}/"
+          }
+        },
+        {
+          "step_no": 2,
+          "description": "Enter tenant id",
+          "action": "type",
+          "target": {
+            "strategy": "placeholder",
+            "value": "default"
+          },
+          "input": "{Tenant}"
+        },
+        {
+          "step_no": 3,
+          "description": "Enter username",
+          "action": "type",
+          "target": {
+            "strategy": "css",
+            "value": "input[autocomplete=\"username\"]"
+          },
+          "input": "{RequesterUsername}"
+        },
+        {
+          "step_no": 4,
+          "description": "Enter password",
+          "action": "type",
+          "target": {
+            "strategy": "css",
+            "value": "input[autocomplete=\"current-password\"]"
+          },
+          "input": "{RequesterPassword}"
+        },
+        {
+          "step_no": 5,
+          "description": "Click the Sign in submit button (css, not role/name='Sign in': that also matches the 'Sign in' TAB toggle above the form, which is ambiguous)",
+          "action": "click",
+          "target": {
+            "strategy": "css",
+            "value": "button.btn-primary"
+          },
+          "expected": {
+            "type": "visible",
+            "target": {
+              "strategy": "text",
+              "value": "DASHBOARDS"
+            }
+          },
+          "delay_after_ms": 60000
+        },
+        {
+          "step_no": 6,
+          "description": "Open the Engineering & PLM Change Management Cockpit dashboard",
+          "action": "navigate",
+          "target": {
+            "strategy": "url",
+            "value": "{base_url}/studio/dashboard/and_engineering"
+          }
+        },
+        {
+          "step_no": 7,
+          "description": "Wait for the whole dashboard to finish loading -- 12 widgets including two separate LLM-backed calls (ai_insight_panel, action_panel), confirmed by a live run to still show 'Loading...' on the basic stat cards at 12s",
+          "action": "wait",
+          "input": "120000"
+        },
+        {
+          "step_no": 8,
+          "description": "Click Approve on the recommendation card whose target is plm-bom-change-impact (scoped via the card's own machine-rendered target-id line, not the LLM-paraphrased title/body, since only the id is guaranteed stable across runs)",
+          "action": "click",
+          "target": {
+            "strategy": "xpath",
+            "value": "//p[contains(., \"plm-bom-change-impact\")]/parent::div//button[normalize-space()=\"Approve\"]"
+          },
+          "expected": {
+            "type": "visible",
+            "target": {
+              "strategy": "role",
+              "value": "button"
+            }
+          }
+        },
+        {
+          "step_no": 9,
+          "description": "Confirm execution in the Yes, execute / Cancel prompt",
+          "action": "click",
+          "target": {
+            "strategy": "role",
+            "value": "button",
+            "name": "Yes, execute"
+          },
+          "expected": {
+            "type": "text_contains",
+            "value": "Submitted for approval",
+            "target": {
+              "strategy": "text",
+              "value": "Submitted for approval"
+            }
+          },
+          "delay_after_ms": 6000
+        }
+      ]
+    },
+    {
+      "id": "TC-002",
+      "title": "Engineering approver approves stage 1 of 2, advancing the request to the Program Manager stage",
+      "area_path": "AD_demo/ApprovalWorkflow",
+      "priority": 1,
+      "preconditions": "TC-001 has already run and created a pending engineering_change_approval request; ad_engineer holds the 'engineering' role and this is the ONLY item in their assigned inbox (clean-state assumption -- see suite notes).",
+      "variables": {
+        "Tenant": {
+          "source": "constant",
+          "value": "AD_demo"
+        },
+        "RequesterUsername": {
+          "source": "constant",
+          "value": "ad_requester"
+        },
+        "RequesterPassword": {
+          "source": "constant",
+          "value": "TestPass123!"
+        },
+        "EngineerUsername": {
+          "source": "constant",
+          "value": "ad_engineer"
+        },
+        "EngineerPassword": {
+          "source": "constant",
+          "value": "TestPass123!"
+        },
+        "PmUsername": {
+          "source": "constant",
+          "value": "ad_pm"
+        },
+        "PmPassword": {
+          "source": "constant",
+          "value": "TestPass123!"
+        }
+      },
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Open the Portal login page",
+          "action": "navigate",
+          "target": {
+            "strategy": "url",
+            "value": "{base_url}/"
+          }
+        },
+        {
+          "step_no": 2,
+          "description": "Enter tenant id",
+          "action": "type",
+          "target": {
+            "strategy": "placeholder",
+            "value": "default"
+          },
+          "input": "{Tenant}"
+        },
+        {
+          "step_no": 3,
+          "description": "Enter username",
+          "action": "type",
+          "target": {
+            "strategy": "css",
+            "value": "input[autocomplete=\"username\"]"
+          },
+          "input": "{EngineerUsername}"
+        },
+        {
+          "step_no": 4,
+          "description": "Enter password",
+          "action": "type",
+          "target": {
+            "strategy": "css",
+            "value": "input[autocomplete=\"current-password\"]"
+          },
+          "input": "{EngineerPassword}"
+        },
+        {
+          "step_no": 5,
+          "description": "Click the Sign in submit button (css, not role/name='Sign in': that also matches the 'Sign in' TAB toggle above the form, which is ambiguous)",
+          "action": "click",
+          "target": {
+            "strategy": "css",
+            "value": "button.btn-primary"
+          },
+          "expected": {
+            "type": "visible",
+            "target": {
+              "strategy": "text",
+              "value": "DASHBOARDS"
+            }
+          },
+          "delay_after_ms": 20000
+        },
+        {
+          "step_no": 6,
+          "description": "Open the assigned-to-me Inbox tab",
+          "action": "navigate",
+          "target": {
+            "strategy": "url",
+            "value": "{base_url}/studio/inbox/assigned"
+          }
+        },
+        {
+          "step_no": 7,
+          "description": "Wait for the assigned-requests table to load",
+          "action": "wait",
+          "input": "25000"
+        },
+        {
+          "step_no": 8,
+          "description": "Open the pending request (first, and only, row)",
+          "action": "click",
+          "target": {
+            "strategy": "css",
+            "value": "table tbody tr:first-child"
+          },
+          "expected": {
+            "type": "visible",
+            "target": {
+              "strategy": "text",
+              "value": "Approval chain"
+            }
+          },
+          "delay_after_ms": 1500
+        },
+        {
+          "step_no": 9,
+          "description": "Select the pending engineering stage node in the approval-chain canvas",
+          "action": "click",
+          "target": {
+            "strategy": "text",
+            "value": "engineering"
+          },
+          "expected": {
+            "type": "visible",
+            "target": {
+              "strategy": "role",
+              "value": "button"
+            }
+          }
+        },
+        {
+          "step_no": 10,
+          "description": "Click Approve for this stage",
+          "action": "click",
+          "target": {
+            "strategy": "role",
+            "value": "button",
+            "name": "Approve"
+          },
+          "expected": {
+            "type": "visible",
+            "target": {
+              "strategy": "text",
+              "value": "approved"
+            }
+          },
+          "delay_after_ms": 2000
+        }
+      ]
+    },
+    {
+      "id": "TC-003",
+      "title": "Program Manager approves the final stage, and the flow actually executes",
+      "area_path": "AD_demo/ApprovalWorkflow",
+      "priority": 1,
+      "preconditions": "TC-002 has already run and advanced the request to stage 2 (program_manager); ad_pm holds the 'program_manager' role and this is the ONLY item in their assigned inbox (clean-state assumption -- see suite notes).",
+      "variables": {
+        "Tenant": {
+          "source": "constant",
+          "value": "AD_demo"
+        },
+        "RequesterUsername": {
+          "source": "constant",
+          "value": "ad_requester"
+        },
+        "RequesterPassword": {
+          "source": "constant",
+          "value": "TestPass123!"
+        },
+        "EngineerUsername": {
+          "source": "constant",
+          "value": "ad_engineer"
+        },
+        "EngineerPassword": {
+          "source": "constant",
+          "value": "TestPass123!"
+        },
+        "PmUsername": {
+          "source": "constant",
+          "value": "ad_pm"
+        },
+        "PmPassword": {
+          "source": "constant",
+          "value": "TestPass123!"
+        }
+      },
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Open the Portal login page",
+          "action": "navigate",
+          "target": {
+            "strategy": "url",
+            "value": "{base_url}/"
+          }
+        },
+        {
+          "step_no": 2,
+          "description": "Enter tenant id",
+          "action": "type",
+          "target": {
+            "strategy": "placeholder",
+            "value": "default"
+          },
+          "input": "{Tenant}"
+        },
+        {
+          "step_no": 3,
+          "description": "Enter username",
+          "action": "type",
+          "target": {
+            "strategy": "css",
+            "value": "input[autocomplete=\"username\"]"
+          },
+          "input": "{PmUsername}"
+        },
+        {
+          "step_no": 4,
+          "description": "Enter password",
+          "action": "type",
+          "target": {
+            "strategy": "css",
+            "value": "input[autocomplete=\"current-password\"]"
+          },
+          "input": "{PmPassword}"
+        },
+        {
+          "step_no": 5,
+          "description": "Click the Sign in submit button (css, not role/name='Sign in': that also matches the 'Sign in' TAB toggle above the form, which is ambiguous)",
+          "action": "click",
+          "target": {
+            "strategy": "css",
+            "value": "button.btn-primary"
+          },
+          "expected": {
+            "type": "visible",
+            "target": {
+              "strategy": "text",
+              "value": "DASHBOARDS"
+            }
+          },
+          "delay_after_ms": 20000
+        },
+        {
+          "step_no": 6,
+          "description": "Open the assigned-to-me Inbox tab",
+          "action": "navigate",
+          "target": {
+            "strategy": "url",
+            "value": "{base_url}/studio/inbox/assigned"
+          }
+        },
+        {
+          "step_no": 7,
+          "description": "Wait for the assigned-requests table to load",
+          "action": "wait",
+          "input": "25000"
+        },
+        {
+          "step_no": 8,
+          "description": "Open the pending request (first, and only, row)",
+          "action": "click",
+          "target": {
+            "strategy": "css",
+            "value": "table tbody tr:first-child"
+          },
+          "expected": {
+            "type": "visible",
+            "target": {
+              "strategy": "text",
+              "value": "Approval chain"
+            }
+          },
+          "delay_after_ms": 1500
+        },
+        {
+          "step_no": 9,
+          "description": "Select the pending program_manager stage node in the approval-chain canvas",
+          "action": "click",
+          "target": {
+            "strategy": "text",
+            "value": "program_manager"
+          },
+          "expected": {
+            "type": "visible",
+            "target": {
+              "strategy": "role",
+              "value": "button"
+            }
+          }
+        },
+        {
+          "step_no": 10,
+          "description": "Click Approve for the final stage -- this is the last approval, so the flow executes immediately",
+          "action": "click",
+          "target": {
+            "strategy": "role",
+            "value": "button",
+            "name": "Approve"
+          },
+          "expected": {
+            "type": "visible",
+            "target": {
+              "strategy": "text",
+              "value": "Execution result"
+            }
+          },
+          "delay_after_ms": 4000
+        }
+      ]
+    }
+  ]
+}

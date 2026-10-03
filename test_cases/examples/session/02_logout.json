@@ -1,0 +1,32 @@
+{
+  "suite_id": "SESSION-DEMO-LOGOUT",
+  "suite_name": "Logout after inherited login session",
+  "environment": "demo",
+  "on_case_fail": "continue",
+  "cases": [
+    {
+      "id": "TC-101",
+      "title": "Secure area reachable without re-login (proves the browser session carried over from 01_login.json), then logout",
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Navigate directly to the secure area without logging in again",
+          "action": "navigate",
+          "target": {"strategy": "url", "value": "{base_url}/secure"},
+          "expected": {"type": "url_contains", "value": "/secure"}
+        },
+        {
+          "step_no": 2,
+          "description": "Click Logout",
+          "action": "click",
+          "target": {"strategy": "role", "value": "link", "name": "Logout"},
+          "expected": {
+            "type": "text_contains",
+            "value": "You logged out of the secure area",
+            "target": {"strategy": "css", "value": "#flash"}
+          }
+        }
+      ]
+    }
+  ]
+}

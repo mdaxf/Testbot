@@ -1,0 +1,75 @@
+{
+  "suite_id": "TABLE-SCROLL-DEMO",
+  "suite_name": "Table row/cell selection and scrolling",
+  "environment": "demo",
+  "on_case_fail": "continue",
+  "cases": [
+    {
+      "id": "TC-501",
+      "title": "Select rows/cells by position and by content, then scroll",
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Navigate to the Sortable Data Tables page",
+          "action": "navigate",
+          "target": {"strategy": "url", "value": "{base_url}/tables"}
+        },
+        {
+          "step_no": 2,
+          "description": "1st row of the table (nth on the flattened cell list): its 1st cell is 'Smith'",
+          "action": "assert",
+          "expected": {
+            "type": "text_equals",
+            "value": "Smith",
+            "target": {"strategy": "css", "value": "#table1 tbody tr td", "nth": 1}
+          }
+        },
+        {
+          "step_no": 3,
+          "description": "Select the row containing 'Bach' by content, verify its Due amount",
+          "action": "assert",
+          "expected": {
+            "type": "text_contains",
+            "value": "$51.00",
+            "target": {"strategy": "row_containing", "value": "Bach", "scope": "#table1"}
+          }
+        },
+        {
+          "step_no": 4,
+          "description": "Select the specific cell at row 3, column 2 of the table (First Name)",
+          "action": "assert",
+          "expected": {
+            "type": "text_equals",
+            "value": "Jason",
+            "target": {"strategy": "table_cell", "value": "#table1", "row": 3, "col": 2}
+          }
+        },
+        {
+          "step_no": 5,
+          "description": "Click the row containing 'Doe' (a real click, not just an assertion)",
+          "action": "click",
+          "target": {"strategy": "row_containing", "value": "Doe", "scope": "#table1"}
+        },
+        {
+          "step_no": 6,
+          "description": "Scroll the page down",
+          "action": "scroll",
+          "input": "down:300"
+        },
+        {
+          "step_no": 7,
+          "description": "Scroll back to the top",
+          "action": "scroll",
+          "input": "top"
+        },
+        {
+          "step_no": 8,
+          "description": "Scroll the second table into view and confirm it's visible",
+          "action": "scroll",
+          "target": {"strategy": "css", "value": "#table2"},
+          "expected": {"type": "visible", "target": {"strategy": "css", "value": "#table2"}}
+        }
+      ]
+    }
+  ]
+}

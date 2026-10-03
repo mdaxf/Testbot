@@ -1,0 +1,89 @@
+{
+  "suite_id": "SAMPLE-001",
+  "suite_name": "Sample login smoke test",
+  "environment": "demo",
+  "on_case_fail": "continue",
+  "cases": [
+    {
+      "id": "TC-001",
+      "title": "Successful login shows the secure area",
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Navigate to the login page",
+          "action": "navigate",
+          "target": {"strategy": "url", "value": "{base_url}/login"},
+          "expected": {"type": "url_contains", "value": "/login"}
+        },
+        {
+          "step_no": 2,
+          "description": "Enter the username",
+          "action": "type",
+          "target": {"strategy": "label", "value": "Username"},
+          "input": "tomsmith"
+        },
+        {
+          "step_no": 3,
+          "description": "Enter the password",
+          "action": "type",
+          "target": {"strategy": "label", "value": "Password"},
+          "input": "SuperSecretPassword!"
+        },
+        {
+          "step_no": 4,
+          "description": "Click the Login button",
+          "action": "click",
+          "target": {"strategy": "role", "value": "button", "name": "Login"},
+          "expected": {
+            "type": "text_contains",
+            "value": "You logged into a secure area",
+            "target": {"strategy": "css", "value": "#flash"}
+          }
+        }
+      ]
+    },
+    {
+      "id": "TC-002",
+      "title": "Illustrative only: SQL lookup feeding input, then a UI-captured value verified back in SQL",
+      "variables": {
+        "ProductID": {
+          "source": "sql",
+          "query": "SELECT ProductID FROM PRODUCT WHERE PartNo = 'PartABC'"
+        }
+      },
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Navigate to the order line screen",
+          "action": "navigate",
+          "target": {"strategy": "url", "value": "{base_url}/screens/order-line"}
+        },
+        {
+          "step_no": 2,
+          "description": "Enter the looked-up Product ID",
+          "action": "type",
+          "target": {"strategy": "label", "value": "Product"},
+          "input": "{ProductID}"
+        },
+        {
+          "step_no": 3,
+          "description": "Post and capture the generated Bill Number",
+          "action": "click",
+          "target": {"strategy": "role", "value": "button", "name": "Post"},
+          "capture": {
+            "var": "BillNumber",
+            "from": "element_text",
+            "target": {"strategy": "label", "value": "Bill Number"}
+          }
+        },
+        {
+          "step_no": 4,
+          "description": "Verify the bill exists in the database",
+          "action": "sql_query",
+          "query": "SELECT COUNT(*) AS Cnt FROM BILL_HEADER WHERE BillNumber = '{BillNumber}'",
+          "expected": {"type": "sql_result_equals", "column": "Cnt", "value": 1}
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+# One block per environment. `base_url` seeds the {base_url} variable for every case.
+# `connections` maps a connection name (referenced by a step's `connection` field,
+# default "default") to an ODBC connection string.
+
+demo:
+  base_url: "https://the-internet.herokuapp.com"
+  connections: {}
+
+qa:
+  base_url: "https://qa.example.local/portal"
+  connections:
+    default: "Driver={ODBC Driver 17 for SQL Server};Server=QA-SQL01;Database=YourAprisoDb;Trusted_Connection=yes;"
+
+# mom-mcp's own embedded Studio (the admin app's third Studio copy, no
+# separate mom-portal process needed) -- started via
+# `python -m mom_mcp serve --host 127.0.0.1 --port 8787` from the mom-mcp
+# repo. base_url includes /admin since that's where the SPA (and its
+# React Router basename) actually lives; /studio/* paths resolve under it.
+# Point base_url at a different deployment for staging/prod runs of the
+# same test cases.
+ad_demo_portal:
+  base_url: "http://127.0.0.1:8787/admin"
+  connections: {}
+
+# Apriso 2023 test server. Fill in the database password (or remove the connection if the agent should not read the database).
+win_apr23:
+  base_url: "http://win-apr23/apriso/apriso"
+  connections:
+    default: "Driver={ODBC Driver 18 for SQL Server};Server=win-apr23;Database=APRISO;UID=flxadmin;PWD=CHANGE_ME;Encrypt=no;TrustServerCertificate=yes;"

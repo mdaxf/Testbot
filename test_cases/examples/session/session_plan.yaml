@@ -1,0 +1,7 @@
+session_id: "SESSION-LOGIN-LOGOUT"
+session_name: "Login then logout, sharing the browser session across files"
+environment: "demo"
+files:
+  - path: "test_cases/examples/session/01_login.json"
+  - path: "test_cases/examples/session/02_logout.json"
+    shares_state_with_previous: true

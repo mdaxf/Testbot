@@ -1,0 +1,33 @@
+__pycache__/
+*.pyc
+.venv/
+.venv-build/
+venv/
+reports/
+.env
+*.egg-info/
+build/
+dist/
+
+# build output, environments and packaged apps (the exes are ~1 GB; build them with the specs)
+.venv-build314/
+.venv*/
+dist_*/
+dist_package/
+*.zip
+*.whl
+
+# local settings, secrets, logs and backups
+.claude/
+.env
+.env.*
+!.env.example
+*.log
+logs/
+*.bak
+*.bak.*
+testbot-workspace.json
+schedules/
+
+# customer scenario with a login/password and internal server details: kept local
+test_cases/apriso-bpa-pls*.json

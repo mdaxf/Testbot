@@ -1,0 +1,78 @@
+# Maps the control types used by the Apriso "AutomaticTest" JSON (Selenium/C#) to testbot steps.
+# Derived from C:\working\AutomaticTest\SVC.AutomaticTest\SeleniumTests\Helpers\GetElement.cs
+# (CSS definitions) and Actions.cs (what each type does). Edit/extend here -- no code change needed.
+#
+# css placeholders (values are trimmed first):
+#   {id}   the Identifier as a quoted CSS string, for attribute values:  [data-key={id}]
+#   {raw}  the Identifier as-is, for class names:                        .fc_{raw}
+#   {row}  row part of a "row,field" identifier -> tr:nth-child(n+1); a bare field means the LAST row
+#   {field} the field part of a "row,field" identifier (quoted, for [data-field={field} i])
+#
+# Options per control:
+#   role        input | action | result        (which JSON section the type appears in)
+#   op          click | type | type_enter | select | check | select_row | hover | sql_exec | sql_query
+#   popup_aware true  = search inside `.apr-popup` while a popup is open (Selenium's CheckPopUp)
+#   frame       false = element lives in the top document, not the screen iframe
+#   spinner     true  = wait for the Apriso spinner to clear after the step (Selenium's Wait.ToLoad)
+
+frame: ".apr-fullscreen-tab"      # Apriso screens render inside this iframe
+popup_scope: ".apr-popup"
+first_match: true                 # Selenium's FindElement takes the FIRST match; testbot otherwise wants a unique one
+spinner: ".apr-ctspinner"
+spinner_timeout_ms: 10000
+default_step_delay_ms: 500        # Wait.Pause() -- half a second before every element lookup
+
+# Sequence token: the JSON writes "#" where a unique number is needed ("#_TestLine"). The C# runner
+# replaces it with the value below, read at use time; the SQLNonQuery step that runs the update
+# procedure bumps it. Converted suites capture it into {seq} and re-capture after each such call.
+sequence:
+  query: "SELECT Next_ FROM SEQUENCE_ WHERE Name = 'AUTOMATED_TEST_SEQUENCE'"
+  bumped_by: "AutomatedTestSequence"     # substring identifying the SQLNonQuery that changes it
+  var: seq
+
+# Login + opening the screen (Actions.Login / UI.GoToScreen). Values become suite variables to fill in.
+login:
+  # 2023+: logon.html first asks for a login method; picking "Standard Login" leads to Kiosk/Login.aspx.
+  # Remove select_method for installs that open the login form directly.
+  select_method: "a.item[href*=\"openLogonWindow('standard')\"]"
+  form: "[id*='LoginTextBox']"   # 2023+ renders #loginForm as an empty (zero-size) div; wait on the field
+  user_field: "[id*='LoginTextBox']"
+  password_field: "[id*='PasswordTextbox']"
+  submit: "[id*='LogInButton']"
+  # After logging in, 2023+ can land on a transient "Portal Error" page; opening the portal home
+  # directly (variable portal_home_url) is what its "Go Back to Portal" link does.
+  home_url_var: portal_home_url
+  # UI.LogOut(): frees the licence slot (unregistered installs allow very few concurrent users)
+  logout_menu: ".apr-current-user"
+  logout_item: "span.logout"
+  search_box: ".apr-searchbox input"
+  search_item: ".apr-search-item"
+  first_item: "search-box-item:nth-of-type(1)"
+
+controls:
+  # ---- grid -------------------------------------------------------------------------------
+  GridButton:        {role: action, op: click,      css: ".DynamicGrid button[data-key={id}]", popup_aware: true, spinner: true}
+  SelectRow:         {role: action, op: select_row, css: ".DynamicGrid [id*='content'] tr:nth-child({n})", popup_aware: true, spinner: true}
+  SingleValueFilter: {role: input,  op: type_enter, css: ".DynamicGrid input[data-field={id}]", popup_aware: true, spinner: true}
+  DropdownFilter:    {role: input,  op: select,     css: ".DynamicGrid select[data-field={id}]", popup_aware: true, spinner: true}
+  DateFromFilter:    {role: input,  op: type_enter, css: ".DynamicGrid [data-field={id}][placeholder='From']", popup_aware: true, spinner: true}
+  DateToFilter:      {role: input,  op: type_enter, css: ".DynamicGrid [data-field={id}][placeholder='To']", popup_aware: true, spinner: true}
+  GridRowInput:      {role: input,  op: type,       css: ".DynamicGrid [id*='content'] tr{row} [data-field={field} i] input", popup_aware: true}
+  GridRowDropDown:   {role: input,  op: select,     css: ".DynamicGrid [id*='content'] tr{row} [data-field={field} i] select", popup_aware: true}
+  GridRowCheckBox:   {role: input,  op: check,      css: ".DynamicGrid [id*='content'] tr{row} [data-field={field} i] label", popup_aware: true}
+  GridRowButton:     {role: action, op: click,      css: ".DynamicGrid [id*='content'] tr{row} [data-field={field} i] button", popup_aware: true, spinner: true}
+  GridRowColumn:     {role: action, op: click,      css: ".DynamicGrid [id*='content'] tr{row} .value[data-field={field} i] span", popup_aware: true, spinner: true}
+  # ---- form -------------------------------------------------------------------------------
+  FormTextbox:       {role: input,  op: type,       css: ".fc_{raw} input", popup_aware: true}
+  FormTextarea:      {role: input,  op: type,       css: ".fc_{raw} textarea", popup_aware: true}
+  FormDropdown:      {role: input,  op: select,     css: ".fc_{raw} select, .fc_{raw} input", popup_aware: true}   # input = HTML5 datalist
+  FormCheckbox:      {role: input,  op: check,      css: ".fc_{raw} label", popup_aware: true}
+  FormButton:        {role: action, op: click,      css: "button[value={id}]", popup_aware: true, spinner: true}
+  # ---- tree / tabs / misc -----------------------------------------------------------------
+  TreeSelect:        {role: action, op: click,      css: "td[data-value={id}]", popup_aware: true, spinner: true}
+  TreeToggle:        {role: action, op: click,      css: "td[data-value={id}] span", popup_aware: true, spinner: true}
+  HorizontalTab:     {role: action, op: click,      css: ".apr-cttabhorizontal button[value={id}]", spinner: true}
+  ErrorMessage:      {role: action, op: click,      css: ".ErrorMessage, .apr-message-error", spinner: true}
+  MouseHover:        {role: action, op: hover,      css: "{raw}"}
+  SQLNonQuery:       {role: action, op: sql_exec}
+  SQLQuery:          {role: result, op: sql_query}

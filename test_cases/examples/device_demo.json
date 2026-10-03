@@ -1,0 +1,34 @@
+{
+  "suite_id": "DEVICE-DEMO",
+  "suite_name": "Each test case targets a different device/viewport",
+  "environment": "demo",
+  "on_case_fail": "continue",
+  "cases": [
+    {
+      "id": "TC-401",
+      "title": "Desktop layout (no device/viewport set -- Playwright's default)",
+      "steps": [
+        {"step_no": 1, "description": "Navigate to the home page", "action": "navigate",
+         "target": {"strategy": "url", "value": "{base_url}"}}
+      ]
+    },
+    {
+      "id": "TC-402",
+      "title": "Mobile layout (device: iPhone 13)",
+      "device": "iPhone 13",
+      "steps": [
+        {"step_no": 1, "description": "Navigate to the home page", "action": "navigate",
+         "target": {"strategy": "url", "value": "{base_url}"}}
+      ]
+    },
+    {
+      "id": "TC-403",
+      "title": "Custom tablet-ish size (viewport: 800x1200)",
+      "viewport": {"width": 800, "height": 1200},
+      "steps": [
+        {"step_no": 1, "description": "Navigate to the home page", "action": "navigate",
+         "target": {"strategy": "url", "value": "{base_url}"}}
+      ]
+    }
+  ]
+}

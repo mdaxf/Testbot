@@ -1,0 +1,59 @@
+{
+  "suite_id": "NTH-DEMO",
+  "suite_name": "Select an item generically by position among identical elements",
+  "environment": "demo",
+  "on_case_fail": "continue",
+  "cases": [
+    {
+      "id": "TC-301",
+      "title": "Delete specifically the 2nd of 3 identical Delete buttons",
+      "steps": [
+        {
+          "step_no": 1,
+          "description": "Navigate to the Add/Remove Elements page",
+          "action": "navigate",
+          "target": {"strategy": "url", "value": "{base_url}/add_remove_elements/"}
+        },
+        {
+          "step_no": 2,
+          "description": "Add the 1st element",
+          "action": "click",
+          "target": {"strategy": "role", "value": "button", "name": "Add Element"}
+        },
+        {
+          "step_no": 3,
+          "description": "Add the 2nd element",
+          "action": "click",
+          "target": {"strategy": "role", "value": "button", "name": "Add Element"}
+        },
+        {
+          "step_no": 4,
+          "description": "Add the 3rd element",
+          "action": "click",
+          "target": {"strategy": "role", "value": "button", "name": "Add Element"},
+          "expected": {
+            "type": "count_equals",
+            "value": 3,
+            "target": {"strategy": "role", "value": "button", "name": "Delete"}
+          }
+        },
+        {
+          "step_no": 5,
+          "description": "Delete specifically the 2nd Delete button (generic positional selection, no unique label exists)",
+          "action": "click",
+          "target": {"strategy": "role", "value": "button", "name": "Delete", "nth": 2}
+        },
+        {
+          "step_no": 6,
+          "description": "Confirm exactly one was removed -- 2 Delete buttons remain",
+          "action": "assert",
+          "expected": {
+            "type": "count_equals",
+            "value": 2,
+            "target": {"strategy": "role", "value": "button", "name": "Delete"}
+          }
+        }
+      ]
+    }
+  ]
+}
