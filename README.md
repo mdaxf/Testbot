@@ -1,4 +1,4 @@
-﻿# Web Test Framework
+﻿# Agentic AI Test Framework
 
 Data-driven web UI testing: Excel/JSON test cases -> Playwright browser automation ->
 SQL-backed test data -> pass/fail reporting (HTML + JUnit XML for Azure DevOps).
