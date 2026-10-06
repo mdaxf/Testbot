@@ -79,6 +79,12 @@ def write_environments(ws: Workspace, envs: dict[str, Any]) -> None:
             raise ValueError(f"environment '{name}' must be a mapping")
         if "connections" in env and not isinstance(env["connections"], dict):
             raise ValueError(f"environment '{name}': connections must be a mapping of name -> connection string")
+        if env.get("email"):
+            from framework import emailer
+
+            problems = emailer.check_block(env["email"], require_host=False)
+            if problems:
+                raise ValueError(f"environment '{name}': " + "; ".join(problems))
     p = _env_file(ws)
     p.parent.mkdir(parents=True, exist_ok=True)
     if p.exists():

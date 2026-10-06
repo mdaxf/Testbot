@@ -18,15 +18,17 @@ DEFAULTS: dict[str, Any] = {
     "results_dir": "reports",
     "schedules_dir": "schedules",
     "config_dir": "config",
+    "groups_dir": "groups",         # test groups (sessions / suites / cases tracked together, e.g. a UAT cycle)
     "runner_command": "",           # empty = auto-detect testbot.exe next to the workspace / on PATH
     "ai": {"provider": "anthropic", "model": "", "ssl_ca_bundle_file": "", "ssl_use_os_truststore": True, "proxy": ""},   # the API key always comes from an environment variable
-    "agent": {"mode": "", "provider": "", "model": "", "vision": "auto", "max_steps": 40, "allow_destructive": False, "profile": ""},
+    "agent": {"mode": "", "provider": "", "model": "", "vision": "auto", "max_steps": 40, "allow_destructive": False, "learn": False, "profile": ""},
+    "email": {},                    # default SMTP settings (server, port, security, username, password_env, from, to, on, attach_report); an environment's email block overrides them
     "logging": {"level": ""},       # debug | info | warning | error ; empty = TESTBOT_LOG_LEVEL or info. Applies to the manager and to the tests it starts
     "server": {"host": "127.0.0.1", "port": 8780},
 }
 
 # tree name -> setting key
-KINDS = {"test_cases": "test_cases_dir", "results": "results_dir", "schedules": "schedules_dir", "config": "config_dir"}
+KINDS = {"test_cases": "test_cases_dir", "results": "results_dir", "schedules": "schedules_dir", "config": "config_dir", "groups": "groups_dir"}
 
 
 class WorkspaceError(Exception):

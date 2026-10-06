@@ -42,7 +42,7 @@ async function optimizeCases(suite, goals, ids, progress) {
 routes.ai = async (main) => {
   const { tests } = await GET("/api/tests");
   const ok = tests.filter((t) => ["testbot", "testbot-excel"].includes(t.format));
-  const tabs = { generate: "Generate", optimize: "Optimize", convert: "Convert" }; let cur = "generate";
+  const tabs = { generate: "Generate", optimize: "Optimize", chat: "Chat", convert: "Convert" }; let cur = "generate";
   const panel = h("div", {}), tabBar = h("div", { class: "tabs" });
   const draw = () => {
     clear(tabBar).append(...Object.entries(tabs).map(([k, l]) => h("button", { class: cur === k ? "active" : "", onclick: () => { cur = k; draw(); } }, l)));
@@ -75,6 +75,8 @@ routes.ai = async (main) => {
       panel.append(h("p", { class: "muted" }, "The AI reviews an existing test case file and proposes a more robust version (better waits and targets, added checks, clearer descriptions) without changing what it tests. Choose the file, then all of its test cases or just one."),
         h("div", { class: "card" }, h("div", { class: "grid g2" }, field("Test case file", selectInput(ok.map((t) => t.path), f.path, (v) => { f.path = v; loadCases(); })), field("Goals (optional)", h("input", { placeholder: "e.g. remove fixed waits, add URL checks", oninput: (e) => (f.goals = e.target.value) }))), caseBox, btn), out);
       loadCases();
+    } else if (cur === "chat") {
+      if (!S.app.ai.configured) panel.append(aiBanner()); else chatPage(panel, tests);
     } else {
       const f = { content: "", hint: "", base_url: "" };
       const fileIn = h("input", { type: "file", onchange: async () => { const file = fileIn.files[0]; if (file) { f.content = await file.text(); f.hint = f.hint || file.name; ta.value = f.content; } } });

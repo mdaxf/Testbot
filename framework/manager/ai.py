@@ -12,6 +12,7 @@ import re
 from typing import Any, Callable, Optional
 
 from framework import tlsconfig
+from framework import suitefix
 from framework.manager import testcases
 from framework.manager.catalog import ACTIONS, EXPECTED, STRATEGIES
 from framework.manager.workspace import Workspace
@@ -187,12 +188,13 @@ def _run(ws: Workspace, user: str) -> dict[str, Any]:
             suite = data.get("suite", data)
             if not isinstance(suite, dict) or not isinstance(suite.get("cases"), list):
                 raise AIError("the reply had no suite with a 'cases' list")
+            fixed = suitefix.normalize_suite(suite, guess_check_targets=True)        # e.g. target strategy "name" -> css [name="..."], empty targets removed
             testcases.renumber(suite)
             problems = [p for p in testcases.validate(suite)]
             errors = [p for p in problems if p["level"] == "error"]
             if errors and attempt == 0:
                 raise AIError("validation errors: " + "; ".join(f"case {e.get('case')} step {e.get('step')}: {e['message']}" for e in errors[:12]))
-            return {"suite": suite, "notes": data.get("notes", []) if isinstance(data, dict) else [], "problems": problems,
+            return {"suite": suite, "notes": (data.get("notes", []) if isinstance(data, dict) else []) + [f"Fixed automatically: {n}" for n in fixed], "problems": problems,
                     "model": model, "repaired": repaired}
         except AIError as exc:
             if attempt == 1:

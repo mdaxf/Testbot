@@ -8,7 +8,11 @@ from typing import Any, Optional
 
 from playwright.sync_api import Page, sync_playwright
 
+import json
+import re
+
 from framework import branding, logs
+from framework.locators import describe as element_describe, resolver
 from framework.actions.executor import execute_action
 from framework.actions.integration_actions import (
     INTEGRATION_ACTIONS, StepAssertionFailed, close_subscriptions, run_integration_action,
@@ -18,6 +22,7 @@ from framework.assertions.engine import evaluate_expected
 from framework.locators.resolver import resolve_target
 from framework.models import CaseResult, StepResult, SuiteResult, TestCase, TestStep, TestSuite, Viewport
 from framework.runner.context_options import resolve_context_options
+from framework.runner.selection import describe, select_cases
 from framework.variables.context import MissingVariableError, VariableContext
 from framework.variables.generators import generate_faker_value
 
@@ -38,7 +43,12 @@ class Orchestrator:
         extra_vars: Optional[dict[str, Any]] = None,
         screenshots: str = "all",
         mode: Optional[str] = None,
+        env_name: Optional[str] = None,
     ):
+        self.suite_path: Optional[Path] = None      # the suite file being run (the agent's recommendation is written back into it)
+        self._heals: list[dict[str, Any]] = []
+        self._current_step: Optional[Any] = None
+        self.env_name = env_name        # the environment the run uses (--env, or the session's): recorded in the results
         self.cli_mode = mode            # --mode; TESTBOT_MODE and the suite/case `mode` are consulted by resolve_mode()
         self.suite_mode: Optional[str] = None
         self.current_suite: Optional[TestSuite] = None
@@ -53,6 +63,10 @@ class Orchestrator:
         self._run_dir: Path = self.report_dir  # overwritten by start_run_dir()
         self.device = device  # CLI-level override; wins over a suite's own `device`/`viewport`
         self.viewport = viewport
+
+    def environment_label(self, suite: TestSuite) -> str:
+        """The environment recorded in the results: the one this run uses, else the suite's own, else 'inline'."""
+        return self.env_name or suite.environment or "inline"
 
     def apply_suite_settings(self, suite: TestSuite) -> None:
         """Suite-level base_url / connections win over the environment's; reset per suite."""
@@ -69,7 +83,12 @@ class Orchestrator:
         logs.attach_run_log(self._run_dir)   # run.log next to the screenshots
         return self._run_dir
 
-    def run_suite(self, suite: TestSuite) -> SuiteResult:
+    def run_suite(self, suite: TestSuite, case_ids: Optional[list[str]] = None, tags: Optional[list[str]] = None) -> SuiteResult:
+        """Run the suite. `case_ids` = only those cases, in that order; `tags` = the cases with those tags (see framework.runner.selection);
+        neither = all cases in file order."""
+        selected = select_cases(suite, case_ids, tags)     # an unknown id / tag fails here, before any browser starts
+        if (suite.status or "default") != "default":
+            run_log.warning("suite %s is marked '%s' (revision %s), not the default revision: running it as it is", suite.suite_id, suite.status, suite.revision)
         started_at = datetime.now(timezone.utc)
         self.apply_suite_settings(suite)
         self.start_run_dir(f"{suite.suite_id}_{started_at.strftime('%Y%m%dT%H%M%SZ')}")
@@ -80,24 +99,37 @@ class Orchestrator:
 
         result = SuiteResult(
             suite_id=suite.suite_id,
-            environment=suite.environment_label,
+            environment=self.environment_label(suite),
+            revision=suite.revision,
             started_at=started_at.isoformat(),
         )
+        if case_ids or tags:
+            result.cases_in_file, result.selected = len(suite.cases), [c.id for c in selected]
+            run_log.info("suite %s: running %s", suite.suite_id, describe(suite, selected, case_ids, tags))
 
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=self.headless)
             try:
-                for case in suite.cases:
-                    context_options = resolve_context_options(
-                        pw, suite, case=case, device_override=self.device, viewport_override=self.viewport
-                    )
-                    context = browser.new_context(**context_options)
-                    page = context.new_page()
-                    case_result, _ = self.run_case(page, case, default_step_delay_ms=suite.default_step_delay_ms)
-                    context.close()
+                context = None
+                ctx = None
+                for idx, case in enumerate(selected):
+                    if idx > 0 and selected.chain[idx] and context is not None:
+                        pass      # a prerequisite just ran: continue in the same browser with its variables
+                    else:
+                        if context is not None:
+                            context.close()
+                        context_options = resolve_context_options(
+                            pw, suite, case=case, device_override=self.device, viewport_override=self.viewport
+                        )
+                        context = browser.new_context(**context_options)
+                        page = context.new_page()
+                        ctx = None
+                    case_result, ctx = self.run_case(page, case, ctx, default_step_delay_ms=suite.default_step_delay_ms)
                     result.cases.append(case_result)
                     if case_result.status != "pass" and suite.on_case_fail == "stop":
                         break
+                if context is not None:
+                    context.close()
             finally:
                 browser.close()
 
@@ -108,7 +140,16 @@ class Orchestrator:
 
     def run_case(self, page: Page, case: TestCase, ctx: Optional[VariableContext] = None, **kwargs: Any) -> tuple[CaseResult, VariableContext]:
         run_log.info("case %s - %s: started (%d step(s)%s)", case.id, case.title, len(case.steps), ", natural language" if case.objective and not case.steps else "")
-        result, ctx = self._run_case(page, case, ctx, **kwargs)
+        started_at = datetime.now(timezone.utc)
+        self._heals = []
+        resolver.HEAL_SINK = self._record_heal
+        try:
+            result, ctx = self._run_case(page, case, ctx, **kwargs)
+        finally:
+            resolver.HEAL_SINK = None
+        self._save_heals(case, result)
+        result.started_at, result.finished_at = started_at.isoformat(), datetime.now(timezone.utc).isoformat()
+        result.revision = case.revision
         level = logging.INFO if result.status == "pass" else (logging.ERROR if result.status == "error" else logging.WARNING)
         run_log.log(level, "case %s: %s in %.1f s (%d/%d step(s) passed)", case.id, result.status.upper(), result.duration_ms / 1000,
                     sum(1 for st in result.steps if st.status == "pass"), len(result.steps))
@@ -174,6 +215,7 @@ class Orchestrator:
 
         try:
             for step in case.steps:
+                self._current_step = step
                 step_log.debug("%s step %s [%s] %s%s", case.id, step.step_no, step.action, logs.clip(step.description, 120), self._log_data(step, ctx))
                 step_result = self._run_step(page, step, ctx, screenshot_id, default_step_delay_ms=default_step_delay_ms)
                 case_result.steps.append(step_result)
@@ -302,6 +344,45 @@ class Orchestrator:
             result.screenshot_path = self._capture_screenshot(page, case_id, step.step_no, "error")
             return result
 
+    def _record_heal(self, target: Any, handle: Any, description: str) -> None:
+        step = self._current_step
+        new = element_describe.element_target(handle)
+        if step is None or new is None or not step.target:
+            return
+        old = step.target.model_dump(exclude_none=True)
+        if {k: new.get(k) for k in ("strategy", "value")} == {k: old.get(k) for k in ("strategy", "value")}:
+            return
+        self._heals.append({"step": step, "old": old, "new": new})
+
+    def _save_heals(self, case: TestCase, result: CaseResult) -> None:
+        """Self-healing: a PASSING scripted case whose target was found by the AI fallback gets a recommendation with the corrected targets (if `learn` is on)."""
+        if not self._heals or result.status != "pass" or not self.suite_path:
+            return
+        from framework import learn
+        from framework.agent.config import AgentConfig
+
+        suite_agent = self.current_suite.agent if self.current_suite and self.current_suite.agent else {}
+        try:
+            if not AgentConfig.from_env({**suite_agent, **(case.agent or {})}).learn:
+                return
+        except Exception:  # noqa: BLE001
+            return
+        steps, notes, seen = [], [], set()
+        for h in self._heals:
+            st = h["step"]
+            if st.step_no in seen:
+                continue
+            seen.add(st.step_no)
+            d = json.loads(st.model_dump_json(exclude_none=True, exclude_defaults=True))
+            d["target"] = {**h["new"], **({"name": h["old"]["name"]} if h["new"]["strategy"] == "role" and h["old"].get("name") else {})}
+            d["replaces_step"] = st.step_no
+            steps.append(d)
+            notes.append(f"step {st.step_no}: the target {h['old'].get('strategy')}={h['old'].get('value')!r} no longer matched; the AI fallback found the element, now {h['new']['strategy']}={h['new']['value']!r}")
+        rec = learn.build(steps, None, run=self._run_dir.name, model="self-healing", verdict="pass", base_revision=getattr(case, "revision", None), notes=notes, kind="heal")
+        if learn.attach(Path(self.suite_path), re.split(r"~\d+$", case.id)[0], rec):
+            run_log.info("case %s: %d healed target(s) saved as a recommendation on the test case, for review", case.id, len(steps))
+        self._heals = []
+
     def _log_data(self, step: TestStep, ctx: VariableContext) -> str:
         """What a step is about to use, for the DEBUG line: the resolved data with anything secret-looking masked."""
         data = self._describe_step_data(step, ctx)
@@ -343,9 +424,10 @@ class Orchestrator:
         if step.target is not None:
             parts.append(f"target[{step.target.strategy}]={_safe_resolve(step.target.value)}")
         if step.input is not None:
-            parts.append(f"input={_safe_resolve(step.input)}")
+            secret = logs.looks_secret(step.input, step.description, step.target.value if step.target else None, step.target.name if step.target else None)
+            parts.append(f"input={'***' if secret else _safe_resolve(step.input)}")      # a password / token / key typed into a field never reaches the report
         if step.query is not None:
-            parts.append(f"query={_safe_resolve(step.query)}")
+            parts.append(f"query={logs.redact(_safe_resolve(step.query))}")
         return " | ".join(parts) if parts else None
 
     def _maybe_capture(

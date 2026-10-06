@@ -6,6 +6,19 @@ SQL-backed test data -> pass/fail reporting (HTML + JUnit XML for Azure DevOps).
 For a task-oriented guide aimed at testers (recorder, Excel/JSON authoring, variables, settings, running,
 reports, troubleshooting), see [docs/USER_MANUAL.md](docs/USER_MANUAL.md).
 
+## Features at a glance
+
+- **Author** tests by recording, in Excel/JSON, by importing (multi-tab Excel, Apriso scenarios) or by **chatting** with the AI; write them in plain language for the **agentic** mode.
+- **Run** a whole suite, **chosen cases in your order** (`--case`, `--tag`, `depends_on`), a **session** across files, or a **test group**; on demand, on a **schedule** or from a pipeline.
+- **Results** by test case, suite or session, each with its final result and final test time; **test groups** track a test effort (for example UAT) with charts, manual results and sign-off.
+- **Email** when a session or group completes (SMTP defaults in Settings, overridable per environment).
+- **History:** every change is a **revision** (suite and case level; only the default runs); the agent's findings arrive as **recommendations** to review (replace / merge / skip), including **self-healing** targets.
+- **Logs** by level, one line per step; ships as one **application folder** that also works on restricted networks.
+
+How to use each one (with the menus and commands): the **"What's new in 0.1.1.1"** table at the top of
+[docs/USER_MANUAL.md](docs/USER_MANUAL.md) points to the section for every feature. The manager's pages:
+Test cases (editor, History, Chat) · Variables · Import · Sessions & schedules · AI · Results · Groups · Reviews · Settings.
+
 ## Setup
 
     pip install -e .
@@ -371,6 +384,40 @@ export, secrets redacted). New result status `inconclusive`. `config/app_profile
 stand-in model and a fake Anthropic server through the real CLI/SDK; not yet with a real model. Section 21 of `docs/USER_MANUAL.md`,
 design in `docs/AGENTIC_TESTING_RESEARCH.md`.
 
+### Revisions, recommendations, chat (`framework/revisions.py`, `framework/learn.py`, `framework/manager/chat.py`)
+
+`revisions.py`: sidecar store `<test_cases>/.revisions/<file>/` (`index.json`, `settings/sN.json`, `cases/<id>/<n>.json`, `chat.json`); case lineages + settings lineage + suite manifests (rN = {settings, cases:{id:rev}, order});
+the suite file on disk is the DEFAULT manifest materialised with `revision`/`status` fields (`save_default`, `sync` for outside edits, `make_default_case/manifest`, `add_draft`, `edit_*_revision` in place, `diff_*`, 50-revision retention).
+`testcases.save_test` goes through it (source/note), `read_test` syncs; the runner runs only `status: default` cases and records `revision` in results. `learn.py`: the `ai_recommendation` node (agent | heal) written after a PASSING run when
+`AgentConfig.learn` (orchestrator.suite_path; heals via `locators.resolver.HEAL_SINK` + `locators.describe.element_target`); review in the editor (`tests.js reviewRecommendation`), `manager/reviews.py` for the Reviews page.
+`chat.py`: per-suite conversation on disk, proposals validated with `suitefix` + `testcases.validate`, applied in the editor / as drafts / directly (AI page).
+
+### Email after a session (`framework/emailer.py`)
+
+SMTP settings are the `email:` block of an environment in `config/environments.yaml` (`check_block` validates it, also when the manager saves the file; a `password` key is refused -- `password_env` names the variable).
+`SessionPlan.notify` (`on`, `to`, `attach_report`) overrides per session. `cli._run_session_once(notify=True)` calls `emailer.notify_session` after the reports are written (not for load-test iterations); it never raises and never
+changes the exit code. TLS uses `tlsconfig.make_ssl_context()` (root certificate file + OS store). `POST /api/email/test` powers the "Send test email" button. Defaults: `emailer.env_defaults()` reads `TESTBOT_EMAIL_*`, the manager exports `ws.data["email"]` to child runs (`emailer.env_for_child`), `emailer.merge()` lays the environment block over them. A schedule item of type `group` calls `groups.run_plan(ws, id, mode)` (all | remaining) -> `session --plan`. Typed secrets are masked in `StepResult.data_used`.
+
+### Test groups (`framework/manager/groups.py`, `static/groups.js`)
+
+A group (`<workspace>/groups/<id>.json`) = members (session / suite / case) + optional start/end date + environment + `frozen` snapshot + `manual` results + `closed`. `resolve()` expands members to unique (suite_id, case_id);
+`track()` computes final result per case in the window (latest occurrence from `results.all_occurrences`, plus manual results; environment filter on the result's recorded environment), daily series, per-member counts and
+the work lists; `remaining_plan()` writes a session plan under `test_cases/_groups/` to run what has not passed; `export_csv/export_html` (server-side SVG). `analysis()` gives the same series for one suite/session over N days.
+`Orchestrator.env_name` records the environment a run used in `SuiteResult.environment`. Charts are SVG built in `groups.js` (no library).
+
+### Results by case / suite / session (`framework/manager/results.py`)
+
+`CaseResult.started_at/finished_at` (UTC) are written by `Orchestrator.run_case`. The manager reads the `*-result.json` files (cached per file mtime) into one *occurrence* per case run and aggregates them:
+`by_case` (final = latest occurrence by finish time, suite and session runs together; key = suite_id + case_id; `TC-1~2` folds into `TC-1`), `by_suite`, `by_session`, `case_detail` (runs, saved sessions that include the case),
+`case_run` (the steps of one case in one run). API: `/api/results/view|case|suite|session`, `/api/result/case`. UI: `static/results.js` (tabs By run / suite / session / test case, case page). HTML reports start with a final-result block (`reporting._final_block`).
+
+### Running chosen test cases (`framework/runner/selection.py`)
+
+`select_cases(suite, ids, tags)` returns a `Selection` (cases in run order + `.chain` flags + `.added` prerequisites): no selection = all cases in file order; ids = in the order listed (repeats become `ID~2`);
+tags = cases with any tag; `depends_on` prerequisites are inserted right before a case and run in the same browser (the orchestrator and the session runner honour `.chain`). Used by `testbot suite --case/--tag`,
+`SessionFile.cases/tags/on_fail`, `SessionPlan.on_fail`, schedule items (`cases`, `tags`), `/api/run`, `/api/test/extract` (copy chosen cases to a new file) and the manager's case picker (`static/cases.js`).
+Unknown ids/tags, missing prerequisites and cycles raise `SelectionError` before any browser starts (`resolve_plan` does the same for a whole session).
+
 ### Run log (`framework/logs.py`)
 
 Standard `logging` under the `testbot.*` loggers (areas: runner, step, sql, integration, agent, manager, scheduler). `TESTBOT_LOG_LEVEL` / `--log-level` (debug, info, warning, error), `TESTBOT_LOG_LEVELS=area=level,...`,
@@ -381,12 +428,10 @@ and shows a run's log with level/area/search filters (`/api/result/log`). Secret
 
 `pyinstaller testbot-app.spec` builds ONE application folder (onedir): three thin launchers (`testbot.exe`, `testbot-manager.exe`, `testbot-recorder.exe`) plus a shared `_internal` with Python, libraries and Chromium. Nothing is unpacked to `%TEMP%` at start-up, which restricted networks and endpoint protection tend to block in single-file exes. The old `testbot.spec` / `manager.spec` / `recorder.spec` (single-file) are kept.
 
-### Version and IACF notice (`framework/version.py`)
+### Version (`framework/version.py`)
 
-One source for the version (**0.1.1.1**) and the notice (© 2026 IACF — All rights reserved): the exe file properties (`framework/versioninfo.py` feeds the
-PyInstaller specs), `--version`, the manager footer/About, the recorder title, the HTML report footer, the wheel (`pyproject.toml` reads it) and the watermark.
-`framework/branding.py` stamps the IACF logo (hardcoded in `framework/brand_logo.py`, no external file) on evidence screenshots and on screenshots sent to the agent's model (`TESTBOT_WATERMARK=off` disables);
-`scripts/stamp_images.py` stamps `docs/images/*.png` once (manifest-based, idempotent). To release a new version edit `__version__` only.
+One source for the version (**0.1.1.1**): the exe file properties (`framework/versioninfo.py` feeds the PyInstaller specs), `--version`, the manager footer/About,
+the recorder title, the HTML report footer and the wheel (`pyproject.toml` reads it). To release a new version edit `__version__` only.
 
 ### `.env` file (`framework/envfile.py`)
 

@@ -94,6 +94,13 @@ class TestCase(BaseModel):
     title: str
     area_path: Optional[str] = None
     priority: Optional[int] = None
+    revision: Optional[int] = None         # which revision of this case this is (written by the manager; see framework/revisions.py)
+    status: Optional[str] = None           # default | draft | superseded -- only the default is run; a missing value counts as default
+    ai_recommendation: Optional[dict[str, Any]] = None     # steps the agent suggests (a note for review; never executed, not part of a revision)
+    tags: list[str] = Field(default_factory=list)          # labels to select by: testbot suite --tag smoke
+    # Cases that must run first (e.g. a login case). Only used when a selection is active: they are put right before this case and run in the
+    # same browser (see framework/runner/selection.py). Running a whole file is unchanged: cases run in file order.
+    depends_on: list[str] = Field(default_factory=list)
     preconditions: Optional[str] = None
     device: Optional[str] = None  # overrides the suite's own device for this case only
     viewport: Optional[Viewport] = None  # overrides the suite's own viewport; ignored if this case's device is set
@@ -112,6 +119,8 @@ class TestCase(BaseModel):
 class TestSuite(BaseModel):
     suite_id: str
     suite_name: str
+    revision: Optional[str] = None         # the suite revision on disk (r12); written by the manager
+    status: Optional[str] = None           # default | draft | superseded; a missing value counts as default
     # Settings can live in the suite itself; `environment` (a block in config/environments.yaml)
     # is now just an optional fallback. Precedence: suite value > environments.yaml value.
     environment: Optional[str] = None
@@ -162,6 +171,9 @@ class CaseResult(BaseModel):
     status: Literal["pass", "fail", "error", "inconclusive"]
     steps: list[StepResult] = Field(default_factory=list)
     duration_ms: int = 0
+    revision: Optional[int] = None       # the revision of this case that ran
+    started_at: Optional[str] = None     # UTC, ISO 8601: when this case started ...
+    finished_at: Optional[str] = None    # ... and finished (the "final test date/time" of the case)
 
 
 class SuiteResult(BaseModel):
@@ -170,6 +182,9 @@ class SuiteResult(BaseModel):
     started_at: str
     finished_at: Optional[str] = None
     cases: list[CaseResult] = Field(default_factory=list)
+    revision: Optional[str] = None          # the suite revision that ran
+    cases_in_file: Optional[int] = None     # set when only some of the file's cases were selected ...
+    selected: Optional[list[str]] = None    # ... and which ones, in the order they ran
 
     @property
     def passed(self) -> int:
@@ -187,6 +202,11 @@ class SessionFile(BaseModel):
     # case, instead of starting fresh. Also makes THIS file's own cases chain continuously
     # (no per-case reset), since "shared with previous" only makes sense as a continuous run.
     shares_state_with_previous: bool = False
+    # Run only these cases of the file, in this order (None = every case, in file order). The same id may be listed twice.
+    cases: Optional[list[str]] = None
+    tags: Optional[list[str]] = None      # run the cases that carry any of these tags (with `cases`: those of them that do)
+    # Overrides the session's `on_fail` for this file.
+    on_fail: Optional[Literal["stop_session", "stop_file", "continue"]] = None
 
 
 class SessionPlan(BaseModel):
@@ -194,6 +214,12 @@ class SessionPlan(BaseModel):
     session_name: str
     environment: Optional[str] = None  # optional fallback for base_url + SQL connections; each file's own suite values win
     files: list[SessionFile]
+    # What a failed case does: stop_session (default: the file's cases finish per its own on_case_fail, then the session stops before the
+    # next file) | stop_file (stop THIS file's remaining cases at the first failure, go on with the next file) | continue (never stop early)
+    on_fail: Literal["stop_session", "stop_file", "continue"] = "stop_session"
+    # Email when the session completes (SMTP settings come from the session's environment: framework/emailer.py). Keys: on (never|always|failure),
+    # to (list: replaces the environment's recipients), attach_report (bool).
+    notify: Optional[dict[str, Any]] = None
     # Load-test settings (all optional; CLI flags override). workers=1 with no iterations/duration = a normal run.
     workers: Optional[int] = None      # parallel worker processes, each running the whole thing independently (default 1)
     iterations: Optional[int] = None   # times each worker repeats the run (default 1, or unlimited if duration_s is set)

@@ -61,6 +61,7 @@ class AgentConfig:
     timeout_s: int = 600           # wall-clock limit for one test
     vision: str = "auto"           # off | auto (screenshot at start, after a failure, or on request) | always
     allow_destructive: bool = False
+    learn: bool = False            # after a PASSING run, save what the agent found as a recommendation on the test case (framework/learn.py)
     profile: str = ""              # path of an app profile (YAML)
     allowed_hosts: list[str] = field(default_factory=list)
     heal: str = "suggest"
@@ -76,6 +77,7 @@ class AgentConfig:
             timeout_s=int(e.get("TESTBOT_AGENT_TIMEOUT_S") or 600),
             vision=(e.get("TESTBOT_AGENT_VISION") or "auto").strip().lower(),
             allow_destructive=_flag(e.get("TESTBOT_AGENT_ALLOW_DESTRUCTIVE")),
+            learn=_flag(e.get("TESTBOT_AGENT_LEARN")),
             profile=(e.get("TESTBOT_AGENT_PROFILE") or "").strip(),
             allowed_hosts=[h.strip() for h in (e.get("TESTBOT_AGENT_ALLOWED_HOSTS") or "").split(",") if h.strip()],
             heal=(e.get("TESTBOT_AGENT_HEAL") or "suggest").strip().lower(),

@@ -16,6 +16,7 @@ This manual covers all three, then how to run tests and read the results.
 
 ## Contents
 
+0. [What's new in 0.1.1.1 — and how to use it](#whats-new-in-0111--and-how-to-use-it)
 1. [What is in the package](#1-what-is-in-the-package)
 2. [Quick start (10 minutes)](#2-quick-start-10-minutes)
 3. [Key ideas: suite, case, step, target, variable](#3-key-ideas)
@@ -38,6 +39,31 @@ This manual covers all three, then how to run tests and read the results.
 20. [The testbot manager: browser UI and scheduler](#20-the-testbot-manager-browser-ui-and-scheduler)
 21. [Agentic testing: tests written in plain language (pilot)](#21-agentic-testing-tests-written-in-plain-language-pilot)
 22. [Quick reference](#22-quick-reference)
+
+---
+
+## What's new in 0.1.1.1 — and how to use it
+
+Everything below is explained in full in the section named in the last column. Start here to find the feature you want.
+
+| I want to… | Do this | Details |
+|---|---|---|
+| Run **only some** test cases of a file, in my order | `testbot.exe suite --suite F --case TC-5 --case TC-2` (or `--tag smoke`). In the manager: tick the cases in the list and use *Run selected test cases…*. | 14.1a |
+| Make a case run **after another** (login first) | In the case, *Depends on* = `TC-LOGIN`. The prerequisite is run first, in the same browser. | 14.1a |
+| Mix cases from **several files** in one session | Sessions page → add items → pick a file, then tick the cases (or tags). Order = list order. Each item gets its own browser unless you tick *same browser*. Set what happens after a failure (*stop session* / *continue*). | 16, 16.1 |
+| See the **final result and final test time** of every case | Results page → view by *Test case*, *Suite* or *Session*. Click a case to see every run and session it was part of. | 15.2, 15.3, 20.8 |
+| Track a **test effort** (for example UAT: 100 cases from Monday) | Groups page → *New group*: add suites, sessions or single cases, set the start date. Watch the pie / daily / by-day charts, enter manual results, press *Run what has not passed*, then *Close the cycle (sign-off)*. | 20.8a |
+| Get an **email** when a session or group finishes | Settings → *Email* (SMTP defaults) and, per environment, an override block. In the session / group tick *Send email* and list the recipients. Use *Send test email* first. | 16.2 |
+| Run a **group on a schedule** | Schedules page → item type *Test group*; choose *all cases* or *only those not passed*. | 20.6 |
+| Import an **Excel file with several tabs** | Test cases → *Import* → tick the tabs (each tab = one test case). Choose *natural language (agentic)* to import the tabs as plain-language cases. | 20.5 |
+| Let the **AI tidy** an imported or broken file | Test cases → *Optimize* (each case is sent on its own). Strategy names and empty targets are repaired for you. | 20.7 |
+| Keep a **history** of changes and go back | Open a suite → **History** tab: compare, *Edit this revision*, *Make default*. Only the *default* revision runs. | 20.3a |
+| Let the agent **suggest better steps** | Turn on *learn* (Settings → Agentic testing, or per case). After a passing run, open the case → *AI recommendation… Review…* → Skip / Add / Replace, apply in the editor or as a draft. | 20.3b |
+| Keep scripted tests working when the page changes | With the AI element finder on, a passing case whose target moved gets a *self-healing recommendation* with the new target. | 20.3b |
+| **Chat** to create or change test cases | Editor → **Chat** tab (or AI page → Chat). Review the proposal diff, then *Apply to the editor*, *Save as draft* or *Dismiss*. | 20.3c |
+| Review everything waiting for me | **Reviews** page: pending recommendations and draft revisions across all suites. | 20.3d |
+| Follow **what the run is doing**, by level | `--log-level debug` or `TESTBOT_LOG_LEVEL`; the run log shows one line per step. | 15.1 |
+| Install on a **restricted network** | Copy the whole `testbot` folder (not a single exe): all three exes share `_internal`. | 1 |
 
 ---
 
@@ -395,7 +421,7 @@ Fields of a **step**:
 | `delay_after_ms` | Pause after this step. |
 
 A case can also have `variables` (section 10), `device`/`viewport` (section 11) and the descriptive
-fields `area_path`, `priority`, `preconditions`. Look at the files in `test_cases\examples\` — copy one and change it.
+fields `area_path`, `priority`, `preconditions`, and the selection fields `tags` and `depends_on` (section 14.1a). Look at the files in `test_cases\examples\` — copy one and change it.
 
 A tip: JSON files can be edited in any text editor, but an editor with JSON checking (Visual Studio
 Code is free) will underline typos such as a missing comma.
@@ -886,6 +912,25 @@ testbot.exe suite --suite test_cases\login.json --device "Pixel 7" --report-dir 
 The final lines summarise each case (`PASS`, `FAIL`, `ERROR`). The program's **exit code** is `0` if every
 case passed and `1` otherwise, so schedulers and build pipelines can use it as a pass/fail signal.
 
+### 14.1a Run only some of the test cases (selection)
+
+A suite file may hold many test cases. To run **only some** of them, **in the order you choose**:
+
+```
+testbot.exe suite --suite orders.json --case TC-5 --case TC-2          # TC-5 first, then TC-2
+testbot.exe suite --suite orders.json --case TC-5,TC-2                 # the same, as a comma list
+testbot.exe suite --suite orders.json --tag smoke                      # every case tagged "smoke", in file order
+testbot.exe suite --suite orders.json --case TC-1 --case TC-1          # the same case twice (the second is named TC-1~2)
+```
+
+- **No `--case` / `--tag` = every case, in file order**, exactly as before.
+- **Order:** the cases run in the order you list them. The same id may be listed twice; the repeat is named `TC-1~2` (then `~3` …) so its results and screenshots never overwrite the first run's.
+- **Tags:** give a case `"tags": ["smoke", "orders"]` (the editor has a *Tags* field). `--tag` runs the cases that have *any* of the tags (repeat `--tag` for several); together with `--case` it keeps those listed cases that carry a tag.
+- **Prerequisites:** a case may say `"depends_on": ["TC-LOGIN"]` (editor: *Depends on*). When you select cases, each one's prerequisites (and theirs) are put **right before it and run in the same browser, with the same variables**, so the login is still there. If the case just before it already is that prerequisite, it is not run again. Running the whole file is not affected: cases then run in file order and each starts clean.
+- **Checked first:** an id or tag that does not exist, a missing prerequisite or a circular `depends_on` stops the run **before any browser opens** (exit code 2) and lists what does exist.
+- **Reports:** the report and the Results page say "3 of 12 case(s) selected, run in this order: …"; cases you did not select are simply not listed.
+- Works with `--workers` / `--iterations` (every worker runs the same selection) and in schedules (an item can carry a case list — section 20.6).
+
 ### 14.2 Run automatically (scheduled / build pipeline)
 
 Because it is an ordinary command with an exit code, testbot fits into any scheduler:
@@ -977,6 +1022,21 @@ The command-line option wins over the environment variable, which wins over the 
 In the manager, open a run on the **Results** page and expand **Run log**: choose the lowest level to show (for example *Warning* to see only what went wrong), narrow it to one area, or search the text. The manager and the scheduler write to `logs\manager.log` in the workspace folder (set the level to `debug` to include every web request).
 
 
+### 15.2 Final result and final test time
+
+Every test case records when it **started and finished** (`started_at` / `finished_at`, UTC, in `…-result.json`). The HTML report starts with a **final result block** — PASS / FAIL / ERROR for the run, the **final test date and time** (when it finished), the duration, the counts, and a table of every test case with its result and finish time. A session report has one for the whole session and one per file. At the end of a run the console prints `Final result: PASS - finished 2026-10-03 14:05:09`.
+
+### 15.3 Results by suite, session and test case
+
+In the manager, **Results** has four views (tabs): **By run** (every run, newest first), **By suite**, **By session** and **By test case**. Each row shows the **final result** and the **final test date / time**, how many times it ran, and a small bar of the recent runs (green = pass).
+
+- **Final result** = the result of the **most recent run that included it**, by finish time. Standalone suite runs and session runs count together (a case is identified by its suite ID plus its case ID). If a later run only selected some cases (section 14.1a), the others keep their earlier result. A case repeated inside one run (`TC-1~2`) counts under `TC-1`.
+- **By test case** — click a case to open its page: the final result and final test time; **every run** of it (date / time, result, duration, **where it ran** — a standalone suite run, or *session X, entry N* — whether it was part of a selection, and the first problem), filterable by result and by session; **click a run to see that run's step results** (data used, expected against actual, error, screenshots) with buttons for the full run, the HTML report and the run log; and **the sessions that include this test case** (saved session plans) with the latest result of each.
+- **By suite** — click a suite for its test cases (each with its final result and time) and all runs of the suite; click a case to open its page.
+- **By session** — click a session for its runs; open a run to see every entry and case. On a run page each case has a **history** link to its case page.
+- Filter by text, final result and period (last 24 hours / 7 / 30 days); sort by newest, by name or failures first. Load-test runs stay in **By run**.
+- The suite and session pages also have an **Analysis** block with charts for a chosen time range; to track a whole test effort (for example UAT) across sessions, suites and cases, use **Test groups** (section 20.8a).
+
 ---
 
 ## 16. Running several files in order (sessions)
@@ -1005,8 +1065,86 @@ testbot.exe session --plan plans\daily.yaml
 
 - Without `shares_state_with_previous`, each file starts with a fresh, empty browser and fresh variables.
 - With it, that file continues the exact browser (cookies, page) and variables left by the previous file, and its own cases run one after another without a reset.
-- If any case in a file fails, **the session stops before the next file**.
+- If any case in a file fails, **the session stops before the next file** (change this with `on_fail`, section 16.1).
 - Options `--headed`, `--report-dir`, `--device`, `--viewport` work as for a suite. Reports are named after the `session_id`.
+
+### 16.1 Choosing cases inside a session
+
+A session entry runs a **whole test suite** (as above) or **only some of its cases**, in the order you list them. The same file can appear several times — for example log in, then run other cases, then log out:
+
+```yaml
+session_id: "DAILY"
+session_name: "Login, orders, logout"
+on_fail: stop_session            # what a failed case does (see below)
+files:
+  - path: "test_cases/auth.json"
+    cases: [TC-LOGIN]            # only this case
+  - path: "test_cases/orders.json"                # no "cases": the whole suite, in file order
+    shares_state_with_previous: true
+  - path: "test_cases/reports.json"
+    cases: [TC-5, TC-2]          # TC-5 first, then TC-2
+    shares_state_with_previous: true
+  - path: "test_cases/orders.json"
+    tags: [cleanup]              # the cases tagged "cleanup"
+  - path: "test_cases/auth.json"
+    cases: [TC-LOGOUT]
+    shares_state_with_previous: true
+    on_fail: continue            # this entry's own rule
+```
+
+- `cases` and `tags` follow the same rules as `--case` / `--tag` (section 14.1a), including prerequisites (`depends_on`).
+- The whole plan is **checked before any browser starts**: every wrong file, case id or tag is listed at once, and the run stops with exit code 2.
+- A file listed twice gets its own screenshot prefix (`SUITE-2__…`), so nothing is overwritten.
+- **`on_fail`** (session-wide, and optionally per entry) says what a failed case does:
+
+| `on_fail` | Meaning |
+|---|---|
+| `stop_session` (default) | The file's remaining cases run as that file's own `on_case_fail` says; then the session stops before the next entry. |
+| `stop_file` | Stop this file's remaining cases at the first failure, then go on with the next entry. |
+| `continue` | Never stop early — not even for a suite whose own `on_case_fail` is `stop`. |
+
+In the manager (*Sessions* page) you do not edit YAML: **+ Add to session…** asks for the test suite and then for **whole suite** or **selected test cases** (tick them, order with ↑↓, or press a *tag:* button). Each entry shows what it contains, with **Cases…** to change it, a *same browser as the previous entry* tick, its own *if a case fails* choice, and ↑↓ ✕ for the order. A **Run order** preview lists every case in sequence. **Save & run ▶** runs the session. The **test case list** and the **editor** also have **Add to session…** (whole file, or the open case).
+
+*Saved selections:* a session with one entry is a named, repeatable selection — there is no separate "preset" feature.
+
+### 16.2 Email when a session completes
+
+testbot can email a summary when a **session** completes. The mail server is set **per environment** (or once as a default in Settings — see below), in the environment's block of `config\environments.yaml` (or on the manager's **Environments & SQL** page, section *Email when a session completes*):
+
+```yaml
+uat:
+  base_url: http://uat-server/apriso
+  email:
+    smtp_host: smtp.company.com
+    smtp_port: 587
+    security: starttls                       # none | starttls | ssl
+    username: testbot@company.com
+    password_env: TESTBOT_SMTP_PASSWORD_UAT  # the NAME of an environment variable -- never the password itself
+    from: testbot@company.com
+    to: [uat-leads@company.com, qa@company.com]
+    on: failure                              # never (default) | always | failure
+    attach_report: false                     # attach the HTML report (default: no)
+```
+
+- **The password is never written to the file.** `password_env` names an environment variable (or a line of the `.env` file, section 11). A file that contains a `password:` key is refused when you save it in the manager.
+- **Nothing is sent unless `on` is `always` or `failure`.** `failure` sends only when at least one test case did not pass.
+- The session's **environment** (its `environment:` line, or `--env`) decides which block is used.
+- **Defaults for every environment (Settings).** Instead of repeating the mail server in each environment, set it once on the manager's **Settings** page (*Email (SMTP) defaults*). An environment's own `email:` block overrides those defaults **field by field** — so the server can be set once and an environment only lists its recipients, for example `uat: email: {to: [uat-leads@company.com], on: failure}`. The manager passes the Settings values to every test it starts as `TESTBOT_EMAIL_HOST`, `_PORT`, `_SECURITY`, `_USERNAME`, `_PASSWORD_ENV`, `_FROM`, `_TO`, `_ON` and `_ATTACH_REPORT`; the same variables work in the `.env` file or the shell when you run `testbot.exe` yourself. Order of precedence, highest first: a session's `notify:` (or a test group's email setting), the environment's `email:` block, the Settings / `TESTBOT_EMAIL_*` defaults.
+- **Test groups.** A test group run (*Run all cases*, *Run what has not passed*, or a schedule) is a session built from the group's cases, so it sends the same email. The group can have its own *Email when this group finishes running* setting (send when, recipients, attach report), which overrides the defaults like a session's `notify:`.
+- **One session can differ:** add a `notify:` block to the session plan — `on` (as above), `to` (replaces the environment's recipients) and `attach_report` — or use the *Email when the session completes* card on the Sessions page:
+
+```yaml
+session_id: "NIGHTLY"
+environment: "uat"
+notify:
+  on: always
+  to: [boss@company.com]
+```
+
+- **The email:** subject `[testbot] NIGHTLY: FAIL 98/100 (uat)`; the final result, the environment, started and finished time, the counts, and a list of the test cases that did not pass with the first problem of each; the machine it ran on. (There is no link to the manager, because it only listens on the computer it runs on.) With `attach_report: true` the HTML report is attached — the reports mask passwords typed into steps (`input=***`), but check what your steps send before attaching them.
+- **Failures never change the test result.** If the mail cannot be sent (server unreachable, wrong password, a certificate problem, the password variable not set, no recipient) the console prints a warning, the run log gets an `ERROR` line in area `email`, and the exit code is unchanged. Load-test runs do not send mail.
+- **Company networks:** the connection uses the same root certificate and proxy-free settings as the AI calls — `TESTBOT_SSL_CA_BUNDLE_FILE` and the Windows certificate store (section 11.5).
+- **Send test email…** (Environments page): sends one message to an address you type, using the settings on the page (even before you save them). It only sends when you press it.
 
 ---
 
@@ -1253,7 +1391,7 @@ in testbot format is marked **Needs import** and opens the Import page.
 
 ![The editor](images/manager-editor.png)
 
-The editor has five tabs:
+The editor has these tabs (the **History**, **Chat** and recommendation features are described in 20.3a – 20.3d):
 
 - **Cases & steps** — the test cases of the file (left) and the steps of the selected case.
   - *Add step* at the end, *insert above / below* any step (`⤒+` / `+⤓`), *duplicate*, *move up / down* or **drag** by the `⋮⋮` handle, *delete*.
@@ -1270,8 +1408,46 @@ Saving:
 
 - **Save** (or Ctrl+S) writes the file. The previous version is kept as `<file>.bak`. A test case that came from Excel is saved as a `.json` next to it.
 - If the file was **changed by someone else** since you opened it, you are told and can reload, save under another name, or overwrite.
-- **Save & run ▶** saves, then runs the test with `testbot.exe` and shows the log live.
+- **Save & run all ▶** saves, then runs the whole file with `testbot.exe` and shows the log live.
+- **Run only some cases:** **☑** on a row of the list (or **Run cases…** in the editor) opens the case picker: *Whole test suite* or *Selected test cases* — tick them, order them with ↑↓, or tick everything with a *tag:* button. **Run ▶** runs just those, in that order. **Run this case ▶** in the editor saves and runs only the open case. **Copy to a new test file…** (in the same picker) creates a new file from the ticked cases — with the suite settings and any prerequisites they need; it never overwrites.
+- **Add to a session:** **⇉** on a row (or **Add to session…** in the editor) adds the whole file, or ticked cases, to an existing or new session (section 16.1).
 - Leaving the page with unsaved changes asks first.
+
+### 20.3a Revisions: history of a suite and of its test cases
+
+Every change to a suite file is kept as a **revision**, so you can see what changed, go back, and keep proposals (from the AI or the agent) separate until you accept them.
+
+- **The file on disk is always the default version** — the one that runs. The runner, sessions, groups, schedules and git work as before. The history lives next to it, in a hidden folder `.revisions\<file>\`.
+- **Test cases have their own revision numbers** (`rev 1, 2, 3…`); the **suite settings** (base URL, variables, connections …) have theirs. A **suite revision** (`r1, r2…`) is only a list that says which revision of each test case belongs together — for example `r14 = {settings s2, TC-1 rev 3, TC-2 rev 1, TC-3 rev 1}`. Changing one test case creates a new revision of that case and a new suite revision; the other cases are untouched. You can make an older revision of one case the default while the others stay on their latest.
+- **Status.** Every suite and test case in the file carries `revision` and `status`: **default** (this is what runs), **draft** (a proposal; not run) or **superseded** (an older version). A file without them counts as the default; the next save adds them. A test case marked `draft` in a file is not run.
+- **Saving the default creates a new revision** (the editor tells you: "Saved as suite revision r4: TC-2"). Saving without a change creates nothing.
+- **A revision that is not the default is edited in place** — no new revision is created. In the **History** tab press *Edit this revision*: the normal editor opens on that revision with a banner (*Editing TC-1 revision 1, not the default*); *Save this revision* keeps the same number, *Save and make default* also puts it into use. Because a revision is one version, an in-place edit shows up in every suite revision that uses it.
+- **History tab:** the suite revisions (what changed, **Changes** to see the difference with the previous one, *Make default*, *Delete*), and the revisions of the selected test case (*Compare with default*, *Edit this revision*, *Make default*, *Delete*). A step-level diff lists added, removed and changed steps and fields. The default cannot be deleted. The last **50** suite revisions are kept; older unused ones are removed.
+- **Changes made outside testbot** (a text editor, a `git pull`) are noticed when you open the suite and recorded as a new revision ("changed outside testbot"), so nothing is silently overwritten.
+- **Results** record the suite revision and each test case's revision that ran (shown on the test case page).
+- The test list shows the revision of each file and how many drafts wait. Excel files are saved as a `.json` next to them and get a history from then on.
+
+### 20.3b The agent suggests improvements (recommendations)
+
+In **agentic** mode the AI agent finds the elements itself. With the **learn** option on, the agent's findings can improve the test case:
+
+- **Turn it on:** per test case (*Natural-language test* box → *let the agent suggest improvements…*), for a whole suite/case with `"agent": {"learn": true}`, or for everything under **Settings → Agentic testing** (`TESTBOT_AGENT_LEARN=1`). It is off by default.
+- **What happens:** after a **passing** agentic run, the steps the agent actually used — each with the element it identified, plus the checks it proved — are written into the test case as an extra node, `ai_recommendation` (status *pending*). **The runner ignores the node and it is not part of a revision, so nothing about the test changes by itself.** A failed or inconclusive run writes nothing, and secrets are never written.
+- **Self-healing:** in a *scripted* run, when a target no longer matches and the AI element finder finds the element, a passing case gets a *self-healing recommendation* with the corrected target for each such step.
+- **Review it:** the test case shows a box *AI recommendation… Review…* (and the sidebar page **Reviews** lists everything pending). The review screen shows each suggested step with a choice — **Skip**, **Add it (keep the original steps)**, or **Replace original step N** (pre-selected for the step that matches; healed steps line up with their original). You can apply part or all, tick *full replacement* to drop the originals that are not replaced, and add the variables the steps use. Apply **in the editor** (Save creates a new revision of the case) or **as a draft revision** (the default stays exactly as it is). The recommendation is then marked *applied* or *skipped*.
+
+### 20.3c Chat: create and change test cases by conversation
+
+The **Chat** tab of the editor (and the **Chat** tab of the AI assistant page) lets you talk to the AI about one suite: *"add a login step before step 3"*, *"create a case that checks the order total"*, *"why does step 4 need a wait?"*.
+
+- The assistant sees the suite's settings, the test case you chose in full (change it with *Chat about*), the other cases as a one-line outline (a case you name by its id is sent in full) and the last messages. **Nothing is sent until you press Send** (Ctrl+Enter also sends). In the editor it sees your unsaved edits.
+- Its answer is text plus, when it changes something, a **proposal**: complete test cases to *replace* or *add*, shown as a step-level diff. AI mistakes (unknown target strategies, empty targets, checks without an element) are tidied first and listed; a proposal that still does not validate is sent back to the model once and never shown.
+- **Apply to the editor** puts the change into the open suite (Save creates a new revision, recorded with the source "chat" and your message as the note) — on the AI assistant page, *Apply* saves the revision straight away. **Save as a draft revision** keeps the default untouched; review the draft in the **History** tab. **Dismiss** ignores it.
+- The conversation is **kept on disk per suite** (`.revisions\<file>\chat.json`); **Clear conversation** deletes it. Keep in mind that the test case you discuss is sent to the AI provider, as with *Optimize*.
+
+### 20.3d Reviews
+
+**Reviews** (sidebar) lists, across all suites, the recommendations waiting for review (agent and self-healing) and the draft revisions (from chat or recommendations). Click a row to open the suite on that test case.
 
 ### 20.4 Variables and SQL
 
@@ -1310,12 +1486,13 @@ Open **Import** and give it a file (upload one, or pick one already in the folde
 
 ![Schedules](images/manager-schedules.png)
 
-**Sessions** are ordered lists of test files (section 16); a file can continue in the same logged-in browser as the previous one.
+**Sessions** are ordered lists of test files or of chosen test cases (section 16); an entry can continue in the same logged-in browser as the previous one. A schedule item for a test file has a **Cases:** button to run only some of its cases.
 
 **Schedules** say *what runs, in what order, and when*:
 
 - **When:** manual only, once (date and time), every N minutes/hours, daily at a time, on chosen weekdays at a time, or monthly on a day.
 - **What:** an ordered list of test files and/or sessions. Per item: an environment, load-test settings (workers, iterations, duration, ramp-up), screenshots, show the browser, a time limit, and *stop the schedule if this fails*. Items run one after the other, in the order shown.
+- **A test group as a schedule item.** An item can be a **Test group**: pick the group and whether to run **all its test cases** or **only the cases not passed yet** (handy for a nightly retest of the failures during UAT). Each run builds a session from the group's cases (the group's own environment applies), so the results count in the group and its charts update. A closed group is not run (a clear message in the history), and an empty or missing group is reported. The group's email setting (or the Settings defaults) decides whether a mail is sent when it finishes.
 - **Run now ▶** starts a schedule immediately from the page, with a live log and a *Cancel* button. This works **without** the scheduler program.
 - **History** lists earlier runs with their status per test and a link to the log. Results of every run appear on the Results page.
 
@@ -1350,6 +1527,8 @@ Setup: choose the provider in Settings (Anthropic, OpenAI, Azure OpenAI or Gemin
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` + `AZURE_OPENAI_DEPLOYMENT`, `GEMINI_API_KEY`). The key is never written to a file.
 
 - Nothing is sent to the AI service unless you press an AI button. What you type (and, for *Optimize*, the test case) is what is sent — do not use it with data that must not leave your network.
+- **Automatic tidy-up of the AI's answer.** AI models sometimes write steps testbot cannot run. Before the answer is checked, testbot rewrites a target strategy it does not know (`name`, `id`, `class`, `link_text` …) with one it does (for example `name=username` becomes `css: [name="username"]`), removes empty targets (`target: {}`), and gives an element check that has no element of its own one: a text check (`text_contains`, `text_equals`) looks at the **whole page** (`css: body`), and `visible` / `value_equals` use the step's own element. Every change is listed in the proposal's notes as *Fixed automatically* — review them, and narrow the whole-page checks where you can. The same safe rewrites (strategy names, empty targets) are applied when the manager saves a file.
+- **Readable errors.** A suite that cannot be loaded now says which case and step and what is wrong, for example `case 1702637 (#2), step 2 "Enter username…": target strategy 'name' is not supported (use one of: …)`, both on the command line and when a session starts (exit code 2, before any browser opens). The editor's *Validate* shows the same wording.
 - The answer is checked with the same rules as the editor, and if it is not valid the assistant asks the model to correct it once. The result is only a **proposal**: you review it, and decide to save it as a new file, add it to the open test case, or (for *Optimize*) replace the original. Nothing is saved by itself.
 - AI output can be wrong. Run the test and read it before trusting it.
 
@@ -1357,10 +1536,45 @@ Setup: choose the provider in Settings (Anthropic, OpenAI, Azure OpenAI or Gemin
 
 ![Results](images/manager-results.png)
 
-**Results** lists every run found in the results folder (suites, sessions, load runs) with status and counts, newest first; filter by text, status or kind.
+**Results** has four views: **By run** lists every run found in the results folder (suites, sessions, load runs) with status and counts, newest first; **By suite**, **By session** and **By test case** show the **final result and final test date / time** of each, and a test case opens a page with all its runs, the sessions it ran in and the step results of the run you pick (section 15.3). Filter by text, status or kind.
 Open a run to see each test case and step: description, data used, status, **expected against actual**, the error, and the **screenshot** (click to enlarge).
 A small bar shows the last runs of the same test (green = passed) — click one to open it. A load run shows its settings, the per-worker totals and every single run with its time.
 *HTML report* opens the report that testbot wrote next to the results.
+
+### 20.8a Test groups: tracking a test effort (for example UAT)
+
+A **test group** is a named set of **sessions, test suites and individual test cases** that you track together — for example *UAT cycle 1*: 100 test cases that start on Monday. Open **Test groups** in the sidebar.
+
+**Create one** (*+ New test group*): a name, a start date (results before it do not count), an optional end date (empty = up to today) and an optional **environment** (only runs against that environment count, e.g. `uat`; the environment recorded in a result is the one the run used — `--env`, or the session's). Then add **members** — any mix of:
+
+- **+ Session…** — every test case the session runs (each entry's whole suite or its selected cases / tags);
+- **+ Test suite…** — all the test cases of a suite;
+- **+ Test cases…** — chosen test cases of a suite (the case picker).
+
+A test case reached through more than one member **counts once**; the editor shows the live count ("6 test cases, 1 reached through more than one member"). A **live** group follows its sessions and suites as they change; tick **Freeze the list** to keep the test cases the group had when you saved it (a UAT scope that must not drift). Delete or duplicate a group from the list — tests and results are never touched.
+
+**Tracking** (the group page, tab *Progress & results*). Each test case's **final result** is its latest result **inside the period** (and on the environment): a re-test after a fix replaces the failure; no result = **not run**. You see:
+
+- the figures — test cases, executed %, passed %, how many passed at the first attempt, still to do;
+- **Final results** — a donut (click a slice or legend entry to list those cases);
+- **Progress by day** — the final result of every case at the end of each day since the start (the burn-up);
+- **By member** — passed / total for each session, suite or set of cases;
+- **Executions per day**;
+- the **test case table** — final result, final test time, attempts, which member(s) it came from, the problem; filters: not run, fail, error, retested (failed, then passed), not passed yet. Click a case for its case page (all runs, step results).
+
+Every chart can be downloaded (**PNG** or **SVG**). Charts are drawn in the page, so they work offline.
+
+**Actions**
+
+- **Run all cases ▶** — runs every test case of the group as a session built from them (the environment of the group applies).
+- **Run what has not passed (N) ▶** — runs only the test cases that are not run or failing, across all the suites, as a session built for you (environment of the group); the results count in the group automatically. Disabled when the group is closed.
+- **Record result…** (per test case) — for tests done by hand: pass or fail, who, and a comment. A manual result counts like a run (the latest wins) and is marked *manual*.
+- **Export CSV** and **Sign-off report (HTML)** — the report has the period, the figures, the donut and the daily chart, the table by member and every test case with its final result and time.
+- **Close the cycle (sign-off)** — records the sign-off time and fixes the end date at today; **Re-open** undoes it.
+
+The **suite** and **session** result pages have an **Analysis** block (donut, results by day, executions per day) for a chosen range — last 7 / 30 / 90 / 180 days — and the case and suite pages list the groups that include them.
+
+Groups are small files in the `groups` folder of the workspace (`groups\<id>.json`).
 
 ### 20.9 Limits
 
@@ -1562,3 +1776,12 @@ hidden · count_equals · sql_result_equals · css_equals · has_class · list_m
 **Variable sources:** constant · faker · sql
 
 **Files after a run:** `reports\<id>.html` (read this) · `<id>-junit.xml` · `<id>-result.json` · screenshot folder
+
+**More commands and switches**
+```
+testbot.exe suite --suite F --case TC-5 --case TC-2     run chosen cases in that order (section 14.1a)
+testbot.exe suite --suite F --tag smoke                 run the cases with a tag
+testbot.exe suite --suite F --log-level debug           more detail in the run log (section 15.1)
+```
+Manager pages: Test cases (editor, History, Chat) · Variables · Import · Sessions & schedules · AI · Results · Groups · Reviews · Settings.
+Environment switches: `TESTBOT_LOG_LEVEL` · `TESTBOT_AGENT_LEARN` · `TESTBOT_EMAIL_HOST` (and the other `TESTBOT_EMAIL_*` defaults).

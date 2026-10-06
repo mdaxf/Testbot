@@ -6,12 +6,16 @@ from typing import Optional
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
+from pydantic import ValidationError
+
 from framework import logs
+from framework.loaders.errors import explain_file
 from framework.loaders.excel_loader import load_suite_from_excel
 from framework.loaders.json_loader import load_suite_from_json
 from framework.models import CaseResult, SessionPlan, SessionResult, SuiteResult, TestSuite
 from framework.runner.context_options import resolve_context_options
 from framework.runner.orchestrator import Orchestrator
+from framework.runner.selection import SelectionError, describe, select_cases
 from framework.variables.context import VariableContext
 
 log = logs.get("runner")
@@ -24,6 +28,25 @@ def _load_suite(path: str) -> TestSuite:
     if suite_path.suffix.lower() in (".xlsx", ".xlsm"):
         return load_suite_from_excel(suite_path)
     raise ValueError(f"Unsupported suite file type: {suite_path.suffix}")
+
+
+def resolve_plan(plan: SessionPlan) -> list:
+    """Load every file of the plan and resolve its case selection. A wrong file or case id is reported (all of them at once)
+    as a SelectionError before any browser starts. Returns [(entry, suite, selected cases)]."""
+    prepared, problems = [], []
+    for file_entry in plan.files:
+        try:
+            suite = _load_suite(file_entry.path)
+            prepared.append((file_entry, suite, select_cases(suite, file_entry.cases, file_entry.tags, label=f"{file_entry.path}")))
+        except SelectionError as exc:
+            problems.append(str(exc))
+        except ValidationError as exc:      # the suite file has invalid steps: say which, in words
+            problems.append(f"{file_entry.path} has {len(exc.errors())} problem(s):\n      " + "\n      ".join(explain_file(file_entry.path, exc)))
+        except Exception as exc:  # noqa: BLE001 - e.g. file not found
+            problems.append(f"{file_entry.path}: {exc}")
+    if problems:
+        raise SelectionError("the session cannot start:\n  " + "\n  ".join(problems))
+    return prepared
 
 
 class SessionRunner:
@@ -43,6 +66,7 @@ class SessionRunner:
         self.orchestrator = orchestrator
 
     def run(self, plan: SessionPlan) -> SessionResult:
+        prepared = resolve_plan(plan)
         started_at = datetime.now(timezone.utc)
         self.orchestrator.start_run_dir(f"{plan.session_id}_{started_at.strftime('%Y%m%dT%H%M%SZ')}")
 
@@ -60,17 +84,22 @@ class SessionRunner:
             page: Optional[Page] = None
             ctx: Optional[VariableContext] = None
             try:
-                for file_entry in plan.files:
-                    suite = _load_suite(file_entry.path)
+                occurrences: dict[str, int] = {}
+                for file_entry, suite, selected in prepared:
                     self.orchestrator.apply_suite_settings(suite)
+                    self.orchestrator.suite_path = Path(file_entry.path)
                     chain = file_entry.shares_state_with_previous
-                    log.info("session %s: file %s (suite %s, %d case(s)%s)", plan.session_id, file_entry.path, suite.suite_id, len(suite.cases),
-                             ", continues the previous browser session" if chain else "")
+                    policy = file_entry.on_fail or plan.on_fail
+                    occurrences[suite.suite_id] = occurrences.get(suite.suite_id, 0) + 1
+                    n_file = occurrences[suite.suite_id]          # the same file may appear several times: keep its screenshots apart
+                    namespace = f"{suite.suite_id}__" if n_file == 1 else f"{suite.suite_id}-{n_file}__"
+                    log.info("session %s: file %s (suite %s, %s%s)", plan.session_id, file_entry.path, suite.suite_id,
+                             describe(suite, selected, file_entry.cases, file_entry.tags), ", continues the previous browser session" if chain else "")
 
                     if not chain or context is None:
                         if context is not None:
                             context.close()
-                        first_case = suite.cases[0] if suite.cases else None
+                        first_case = selected[0] if selected else None
                         context_options = resolve_context_options(
                             pw,
                             suite,
@@ -85,8 +114,9 @@ class SessionRunner:
                     # continuity is the point) -- its own device/viewport is ignored if it differs
 
                     case_results: list[CaseResult] = []
-                    for i, case in enumerate(suite.cases):
-                        if not chain and i > 0:
+                    for i, case in enumerate(selected):
+                        fresh = not chain and not (i > 0 and selected.chain[i])      # a prerequisite case continues in the browser it just used
+                        if fresh and i > 0:
                             context.close()
                             context_options = resolve_context_options(
                                 pw,
@@ -97,33 +127,35 @@ class SessionRunner:
                             )
                             context = browser.new_context(**context_options)
                             page = context.new_page()
-                        if not chain:
+                        if fresh:
                             ctx = None  # fresh variables for every case in a non-shared file
 
                         case_result, ctx = self.orchestrator.run_case(
                             page,
                             case,
                             ctx,
-                            namespace=f"{suite.suite_id}__",
+                            namespace=namespace,
                             default_step_delay_ms=suite.default_step_delay_ms,
                         )
                         case_results.append(case_result)
-                        if case_result.status != "pass" and suite.on_case_fail == "stop":
+                        if case_result.status != "pass" and ((suite.on_case_fail == "stop" and policy != "continue") or policy == "stop_file"):
                             break
 
                     suite_started_at = datetime.now(timezone.utc).isoformat()
                     suite_result = SuiteResult(
                         suite_id=suite.suite_id,
-                        environment=suite.environment_label,
+                        environment=self.orchestrator.environment_label(suite),
                         started_at=suite_started_at,
                         finished_at=datetime.now(timezone.utc).isoformat(),
                         cases=case_results,
+                        cases_in_file=len(suite.cases) if (file_entry.cases or file_entry.tags) else None,
+                        selected=[c.id for c in selected] if (file_entry.cases or file_entry.tags) else None,
                     )
                     result.suites.append(suite_result)
 
                     log.log(30 if suite_result.failed else 20, "session %s: file %s -> %d/%d case(s) passed", plan.session_id, file_entry.path,
                             suite_result.passed, len(case_results))
-                    if suite_result.failed > 0:
+                    if suite_result.failed > 0 and policy == "stop_session":
                         log.warning("session %s stopped after a failure in %s", plan.session_id, file_entry.path)
                         result.stopped_early = True
                         result.stopped_after_file = file_entry.path

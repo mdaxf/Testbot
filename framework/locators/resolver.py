@@ -18,6 +18,9 @@ class LocateError(Exception):
     pass
 
 
+HEAL_SINK = None      # set by the orchestrator for the duration of a case: callable(target, element_handle, description)
+
+
 def resolve_target(page: Page, target: Target, *, description: str = "", wait_ms: int = 0) -> ElementHandle:
     """Hybrid resolution: semantic locator first; AI vision only when that fails
     or resolves ambiguously, or when the step explicitly asks for strategy="ai".
@@ -50,7 +53,13 @@ def resolve_target(page: Page, target: Target, *, description: str = "", wait_ms
 
     fallback_description = description or target.value
     try:
-        return locate_by_description(page, fallback_description)
+        found = locate_by_description(page, fallback_description)
+        if HEAL_SINK is not None:                      # self-healing: remember what replaced the target that no longer matched
+            try:
+                HEAL_SINK(target, found, fallback_description)
+            except Exception:  # noqa: BLE001 - never let the bookkeeping break the step
+                pass
+        return found
     except VisionLocateError as exc:
         if count == 0:
             raise LocateError(

@@ -89,6 +89,10 @@ function textInput(obj, key, { onchange, placeholder, type = "text", list } = {}
   const el = h("input", { type, value: obj[key] ?? "", placeholder, list, oninput: () => { obj[key] = el.value; if (onchange) onchange(el.value); } });
   return el;
 }
+function csvInput(obj, key, { onchange, placeholder } = {}) {   // "a, b" <-> ["a", "b"]
+  const el = h("input", { value: (obj[key] || []).join(", "), placeholder, oninput: () => { obj[key] = el.value.split(",").map((x) => x.trim()).filter(Boolean); if (onchange) onchange(); } });
+  return el;
+}
 function areaInput(obj, key, { rows = 3, onchange, placeholder } = {}) {
   const el = h("textarea", { rows, placeholder, style: { fontFamily: "inherit" }, oninput: () => { obj[key] = el.value; if (onchange) onchange(); } }, obj[key] ?? "");
   return el;
@@ -130,7 +134,7 @@ function readFileB64(file) {
 /* ---- app state, router ---- */
 const S = { catalog: null, app: null, dirty: false };
 const routes = {};
-const NAV = [["tests", "Test cases"], ["import", "Import"], ["sessions", "Sessions"], ["schedules", "Schedules"], ["results", "Results"],
+const NAV = [["tests", "Test cases"], ["reviews", "Reviews"], ["import", "Import"], ["sessions", "Sessions"], ["groups", "Test groups"], ["schedules", "Schedules"], ["results", "Results"],
              ["environments", "Environments & SQL"], ["ai", "AI assistant"], ["settings", "Settings"]];
 
 function parseHash() {

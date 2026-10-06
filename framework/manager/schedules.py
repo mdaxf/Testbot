@@ -18,7 +18,7 @@ from typing import Any, Callable, Optional
 
 import yaml
 
-from framework import logs
+from framework import emailer, logs
 from framework import tlsconfig
 from framework.manager.workspace import Workspace, WorkspaceError
 
@@ -100,14 +100,28 @@ def check_schedule(ws: Workspace, sched: dict[str, Any]) -> list[dict[str, str]]
     if not sched.get("items"):
         problems.append({"level": "warning", "message": "the schedule has no tests to run"})
     for i, item in enumerate(sched.get("items", []), start=1):
-        if item.get("type") not in ("suite", "session"):
-            problems.append({"level": "error", "message": f"item {i}: type must be suite or session"})
+        if item.get("type") not in ("suite", "session", "group"):
+            problems.append({"level": "error", "message": f"item {i}: type must be suite, session or group"})
             continue
         base = "test_cases"
+        if item["type"] == "group":
+            if not item.get("path"):
+                problems.append({"level": "error", "message": f"item {i}: choose a test group"})
+            elif not (ws.dir("groups") / f"{item['path']}.json").exists():
+                problems.append({"level": "warning", "message": f"item {i}: the test group '{item['path']}' does not exist (yet)"})
+            if (item.get("mode") or "all") not in ("all", "remaining"):
+                problems.append({"level": "error", "message": f"item {i}: mode must be all or remaining"})
+            if item.get("cases") or item.get("tags"):
+                problems.append({"level": "error", "message": f"item {i}: a test group item has no cases/tags of its own"})
+            continue
         if not item.get("path"):
             problems.append({"level": "error", "message": f"item {i}: choose a file"})
         elif not ws.safe_path(base, item["path"]).exists():
             problems.append({"level": "warning", "message": f"item {i}: '{item['path']}' does not exist (yet)"})
+        for key in ("cases", "tags"):
+            vals = item.get(key)
+            if vals and (item["type"] != "suite" or not isinstance(vals, list) or not all(isinstance(c, str) and c.strip() for c in vals)):
+                problems.append({"level": "error", "message": f"item {i}: '{key}' is a list of {'test case ids' if key == 'cases' else 'tags'} and only applies to a test file (a session lists its cases in the session itself)"})
     return problems
 
 
@@ -209,10 +223,22 @@ def item_command(ws: Workspace, item: dict[str, Any], report_dir: Path) -> list[
     if runner is None:
         raise WorkspaceError("testbot.exe was not found. Set 'Runner command' in Settings.")
     opts = item.get("options") or {}
-    path = str(ws.safe_path("test_cases", item["path"]))
-    cmd = runner + (["session", "--plan", path] if item["type"] == "session" else ["suite", "--suite", path])
+    if item["type"] == "group":          # a test group runs as a session built from its cases (all of them, or only those not passed yet)
+        from framework.manager import groups
+
+        plan = groups.run_plan(ws, item["path"], item.get("mode") or "all")
+        path = str(ws.safe_path("test_cases", plan["path"]))
+        cmd = runner + ["session", "--plan", path]
+    else:
+        path = str(ws.safe_path("test_cases", item["path"]))
+        cmd = runner + (["session", "--plan", path] if item["type"] == "session" else ["suite", "--suite", path])
+    if item["type"] == "suite":
+        for case_id in item.get("cases") or []:      # only these test cases, in this order
+            cmd += ["--case", str(case_id)]
+        for tag in item.get("tags") or []:           # the cases that carry any of these tags
+            cmd += ["--tag", str(tag)]
     cmd += ["--report-dir", str(report_dir)]
-    if item.get("env"):
+    if item.get("env") and item["type"] == "suite":
         cmd += ["--env", item["env"]]
     if opts.get("headed"):
         cmd.append("--headed")
@@ -228,7 +254,7 @@ def item_command(ws: Workspace, item: dict[str, Any], report_dir: Path) -> list[
     return cmd
 
 
-log = logs.get("scheduler")
+slog = logs.get("scheduler")
 
 
 def agent_env(agent: dict[str, Any]) -> dict[str, str]:
@@ -238,6 +264,8 @@ def agent_env(agent: dict[str, Any]) -> dict[str, str]:
     env = {var: str(agent[key]) for key, var in mapping.items() if agent.get(key) not in (None, "")}
     if agent.get("allow_destructive"):
         env["TESTBOT_AGENT_ALLOW_DESTRUCTIVE"] = "1"
+    if agent.get("learn"):
+        env["TESTBOT_AGENT_LEARN"] = "1"
     return env
 
 
@@ -253,7 +281,7 @@ def run_schedule(ws: Workspace, sched: dict[str, Any], trigger: str = "manual",
             return {"status": "skipped", "message": "already running", "schedule": sid}
         _running[sid] = cancel or threading.Event()
     started = datetime.now()
-    log.info("schedule %s started (%s), %d item(s)", sid, trigger, len(sched.get("items", [])))
+    slog.info("schedule %s started (%s), %d item(s)", sid, trigger, len(sched.get("items", [])))
     run_id = started.strftime("%Y%m%d-%H%M%S")
     run_dir = ws.dir("results") / (sched.get("results_subdir") or sid) / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -282,7 +310,8 @@ def run_schedule(ws: Workspace, sched: dict[str, Any], trigger: str = "manual",
                 log.write(f"\n=== item {n}: {' '.join(cmd)}\n")
                 log.flush()
                 child_env = {**os.environ, **tlsconfig.env_for_child(tlsconfig.TlsSettings.from_dict(ws.data.get("ai", {}))), **agent_env(ws.data.get("agent", {})),
-                             **logs.env_for_child((ws.data.get("logging") or {}).get("level"))}
+                             **logs.env_for_child((ws.data.get("logging") or {}).get("level")),
+                             **emailer.env_for_child(ws.data.get("email"))}
                 proc = subprocess.run(cmd, cwd=str(ws.root), stdout=log, stderr=subprocess.STDOUT, env=child_env,
                                       timeout=item.get("timeout_s") or None)
                 code = proc.returncode
@@ -295,7 +324,7 @@ def run_schedule(ws: Workspace, sched: dict[str, Any], trigger: str = "manual",
             entry.update(status="pass" if code == 0 else "fail", exit_code=code, seconds=round(time.monotonic() - t0, 1),
                          dir=ws.rel("results", item_dir) if item_dir.exists() else None)
             record["items"].append(entry)
-            log.log(20 if code == 0 else 30, "schedule %s item %d (%s): %s, exit code %s, %.1f s", sid, n, item.get("path"), entry["status"], code, entry["seconds"])
+            slog.log(20 if code == 0 else 30, "schedule %s item %d (%s): %s, exit code %s, %.1f s", sid, n, item.get("path"), entry["status"], code, entry["seconds"])
             if code != 0:
                 overall = "fail"
                 if item.get("stop_on_failure") or sched.get("stop_on_failure"):

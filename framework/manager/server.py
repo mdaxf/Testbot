@@ -20,7 +20,8 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 from urllib.parse import parse_qs, urlparse
 
-from framework.manager import ai, dataaccess, importer, results, schedules, scheduler, testcases
+from framework import revisions
+from framework.manager import ai, chat, dataaccess, groups, reviews, importer, results, schedules, scheduler, testcases
 from framework.manager.catalog import catalog
 from framework.manager.workspace import KINDS, Workspace, WorkspaceError
 
@@ -59,6 +60,13 @@ class App:
                 "odbc_drivers": dataaccess.odbc_drivers()}
 
     def put_workspace(self, q, b):
+        from framework import emailer
+
+        problems = emailer.check_block(b.get("email"), require_host=False) if b.get("email") else []
+        if problems:
+            raise ApiError(400, "Email settings: " + "; ".join(problems))
+        if "email" in b:
+            self.ws.data["email"] = {}              # the email block is replaced as a whole (a removed field must stay removed)
         self.ws.save(b)
         self.ws.ensure_dirs()
         return self.state(q, b)
@@ -73,9 +81,80 @@ class App:
         except WorkspaceError as exc:
             raise ApiError(404, str(exc))
 
+    def extract_cases(self, q, b):
+        try:
+            return testcases.extract_cases(self.ws, b["path"], b.get("cases") or [], b["new_path"])
+        except FileExistsError as exc:
+            raise ApiError(409, str(exc))
+        except (ValueError, WorkspaceError) as exc:
+            raise ApiError(400, str(exc))
+
+    # -- revisions (history of a suite and of its test cases)
+    def _rev(self, fn, *args, **kw):
+        try:
+            return fn(self.ws.dir("test_cases"), *args, **kw)
+        except revisions.RevisionError as exc:
+            raise ApiError(400, str(exc))
+        except (OSError, ValueError) as exc:
+            raise ApiError(404, str(exc))
+
+    def revisions_get(self, q, b):
+        return self._rev(revisions.summary, q["path"])
+
+    def revision_case(self, q, b):
+        return {"case": self._rev(revisions.case_content, q["path"], q["case"], q["rev"])}
+
+    def revision_manifest(self, q, b):
+        return {"suite": self._rev(revisions.manifest_suite, q["path"], q["id"])}
+
+    def revision_settings(self, q, b):
+        return {"settings": self._rev(revisions.settings_content, q["path"], q["id"])}
+
+    def revision_diff(self, q, b):
+        if q.get("case"):
+            a = self._rev(revisions.case_content, q["path"], q["case"], q["a"])
+            c = self._rev(revisions.case_content, q["path"], q["case"], q["b"])
+            return {"changes": revisions.diff_cases(a, c)}
+        return self._rev(revisions.diff_manifests, q["path"], q["a"], q["b"])
+
+    def revision_default(self, q, b):
+        kind = b.get("kind")
+        if kind == "case":
+            return self._rev(revisions.make_default_case, b["path"], b["case"], int(b["rev"]), "activated")
+        if kind == "manifest":
+            return self._rev(revisions.make_default_manifest, b["path"], b["id"], "activated")
+        raise ApiError(400, "kind must be case or manifest")
+
+    def revision_inplace(self, q, b):
+        if b.get("kind") == "settings":
+            self._rev(revisions.edit_settings_revision, b["path"], b["id"], b["content"], b.get("note", ""))
+        else:
+            self._rev(revisions.edit_case_revision, b["path"], b["case"], int(b["rev"]), b["content"], b.get("note", ""))
+        return {"saved": True}
+
+    def revision_draft(self, q, b):
+        return {"rev": self._rev(revisions.add_draft, b["path"], b["case"], b["content"], b.get("source", "manual"), b.get("note", ""))}
+
+    def revision_delete(self, q, b):
+        if q.get("kind") == "manifest":
+            self._rev(revisions.delete_manifest, q["path"], q["id"])
+        else:
+            self._rev(revisions.delete_case_revision, q["path"], q["case"], int(q["rev"]))
+        return {"deleted": True}
+
+    def recommendation(self, q, b):
+        """Mark an agent recommendation applied / skipped, or remove it. (It is a note on the case, not a revision.)"""
+        from framework import learn
+
+        try:
+            return {"recommendation": learn.set_status(self.ws.safe_path("test_cases", b["path"]), b["case"], b.get("action", ""))}
+        except (ValueError, OSError) as exc:
+            raise ApiError(400, str(exc))
+
     def put_test(self, q, b):
         try:
-            return testcases.save_test(self.ws, b["path"], b["suite"], b.get("base_mtime"), overwrite=b.get("overwrite", True))
+            return testcases.save_test(self.ws, b["path"], b["suite"], b.get("base_mtime"), overwrite=b.get("overwrite", True),
+                                       source=b.get("source") or "manual", note=b.get("note") or "")
         except testcases.ConflictError as exc:
             raise ApiError(409, str(exc))
         except FileExistsError as exc:
@@ -114,6 +193,25 @@ class App:
     def put_environments(self, q, b):
         dataaccess.write_environments(self.ws, b["environments"])
         return {"saved": True}
+
+    def email_test(self, q, b):
+        """Send ONE test message to the address the user typed, using the environment's email settings (the unsaved ones from the page, if sent)."""
+        from framework import emailer
+
+        env = b.get("environment") or ""
+        if b.get("scope") == "settings":                    # the defaults typed on the Settings page, as they are
+            block = b.get("email")
+        else:                                              # an environment's block (unsaved one from the page, if sent) over the Settings defaults
+            block = emailer.merge(b.get("email") or (dataaccess.read_environments(self.ws).get(env, {}) or {}).get("email"), self.ws.data.get("email"))
+        to = emailer._addresses(b.get("to"))
+        if not to:
+            raise ApiError(400, "type the address to send the test message to")
+        try:
+            s = emailer.settings_for(block, {"on": "always", "to": to}, env)
+            emailer.send(s, emailer.build_test_message(s, env))
+        except emailer.EmailError as exc:
+            return {"ok": False, "message": str(exc)}
+        return {"ok": True, "message": f"A test message was sent to {', '.join(to)}."}
 
     def sql_test(self, q, b):
         cs = b.get("connection_string", "")
@@ -185,7 +283,24 @@ class App:
 
     # -- ad-hoc runs (start a test from the UI)
     def run_now(self, q, b):
+        if str(b.get("type", "")).startswith("group-"):   # a test group: every case ("group-all") or those not passed yet ("group-remaining")
+            mode = b["type"].split("-", 1)[1]
+            try:
+                groups.run_plan(self.ws, b["path"], mode)      # fails early (closed / empty / nothing left) with a clear message
+            except (ValueError, WorkspaceError) as exc:
+                raise ApiError(400, str(exc))
+            sched = {"id": f"adhoc-group-{mode}-" + re.sub(r"[^A-Za-z0-9_.-]", "_", b["path"])[:40], "name": f"Group {b['path']}: {mode}", "results_subdir": "manual/group-" + b["path"],
+                     "items": [{"type": "group", "path": b["path"], "mode": mode, "options": b.get("options") or {}}]}
+            return self._start_run(sched, "manual")
         item = {"type": b.get("type", "suite"), "path": b["path"], "env": b.get("env") or "", "options": b.get("options") or {}}
+        if b.get("cases") and item["type"] == "suite":
+            if not isinstance(b["cases"], list):
+                raise ApiError(400, "'cases' must be a list of test case ids")
+            item["cases"] = [str(c) for c in b["cases"]]
+        if b.get("tags") and item["type"] == "suite":
+            if not isinstance(b["tags"], list):
+                raise ApiError(400, "'tags' must be a list of tags")
+            item["tags"] = [str(t) for t in b["tags"]]
         sid = "adhoc-" + re.sub(r"[^A-Za-z0-9_.-]", "_", Path(b["path"]).stem)[:40]
         sched = {"id": sid, "name": f"Run {b['path']}", "items": [item], "results_subdir": "manual/" + sid}
         return self._start_run(sched, "manual")
@@ -242,6 +357,107 @@ class App:
         except WorkspaceError as exc:
             raise ApiError(404, str(exc))
 
+    def results_view(self, q, b):
+        view = q.get("view", "case")
+        if view not in ("case", "suite", "session"):
+            raise ApiError(400, "view must be case, suite or session")
+        return {"rows": {"case": results.by_case, "suite": results.by_suite, "session": results.by_session}[view](self.ws)}
+
+    def results_case(self, q, b):
+        try:
+            d = results.case_detail(self.ws, q["suite"], q["case"])
+        except WorkspaceError as exc:
+            raise ApiError(404, str(exc))
+        d["groups"] = groups.groups_of(self.ws, q["suite"], q["case"])
+        return d
+
+    def results_suite(self, q, b):
+        try:
+            d = results.suite_detail(self.ws, q["suite"])
+        except WorkspaceError as exc:
+            raise ApiError(404, str(exc))
+        d["groups"] = groups.groups_of(self.ws, q["suite"])
+        return d
+
+    def results_analysis(self, q, b):
+        if q.get("kind") not in ("suite", "session"):
+            raise ApiError(400, "kind must be suite or session")
+        return groups.analysis(self.ws, q["kind"], q["id"], int(q.get("days") or 30))
+
+    # -- test groups
+    def groups_list(self, q, b):
+        return {"groups": groups.list_groups(self.ws)}
+
+    def _group_or_404(self, gid):
+        try:
+            return groups.read_group(self.ws, gid)
+        except WorkspaceError as exc:
+            raise ApiError(404, str(exc))
+
+    def group_get(self, q, b):
+        return {"group": self._group_or_404(q["id"])}
+
+    def group_track(self, q, b):
+        g = self._group_or_404(q["id"])
+        return {"group": {k: v for k, v in g.items() if k not in ("snapshot", "manual")}, "track": groups.track(self.ws, g), "manual": g.get("manual", [])}
+
+    def group_preview(self, q, b):
+        res = groups.resolve(self.ws, b["group"])
+        return {"count": len(res["cases"]), "overlap": res["overlap"], "members": [{k: v for k, v in m.items() if k != "keys"} for m in res["members"]],
+                "cases": [{"suite_id": c["suite_id"], "case_id": c["case_id"], "title": c["title"]} for c in res["cases"]][:500]}
+
+    def group_put(self, q, b):
+        try:
+            return {"group": groups.save_group(self.ws, b["group"], create=bool(b.get("create")))}
+        except FileExistsError as exc:
+            raise ApiError(409, str(exc))
+        except (ValueError, WorkspaceError) as exc:
+            raise ApiError(400, str(exc))
+
+    def group_delete(self, q, b):
+        groups.delete_group(self.ws, q["id"])
+        return {"deleted": q["id"]}
+
+    def group_duplicate(self, q, b):
+        try:
+            return {"group": groups.duplicate_group(self.ws, b["id"], b["new_id"])}
+        except FileExistsError as exc:
+            raise ApiError(409, str(exc))
+        except (ValueError, WorkspaceError) as exc:
+            raise ApiError(400, str(exc))
+
+    def group_manual(self, q, b):
+        try:
+            return groups.add_manual(self.ws, b["id"], b["suite_id"], b["case_id"], b.get("status", ""), b.get("by", ""), b.get("comment", ""))
+        except (ValueError, WorkspaceError) as exc:
+            raise ApiError(400, str(exc))
+
+    def group_close(self, q, b):
+        try:
+            g = groups.set_closed(self.ws, b["id"], bool(b.get("closed", True)))
+        except WorkspaceError as exc:
+            raise ApiError(404, str(exc))
+        return {"group": {k: v for k, v in g.items() if k not in ("snapshot", "manual")}}
+
+    def group_export(self, q, b):
+        gid, fmt = q["id"], q.get("format", "csv")
+        self._group_or_404(gid)
+        if fmt == "html":
+            return {"filename": f"{gid}-report.html", "content": groups.export_html(self.ws, gid)}
+        return {"filename": f"{gid}-results.csv", "content": "\ufeff" + groups.export_csv(self.ws, gid)}
+
+    def results_session(self, q, b):
+        try:
+            return results.session_detail(self.ws, q["session"])
+        except WorkspaceError as exc:
+            raise ApiError(404, str(exc))
+
+    def result_case_run(self, q, b):
+        try:
+            return results.case_run(self.ws, q["path"], q["suite"], q["case"], int(q.get("occ") or 1), int(q["entry"]) if q.get("entry") else None)
+        except WorkspaceError as exc:
+            raise ApiError(404, str(exc))
+
     def result_iterations(self, q, b):
         return {"iterations": results.worker_results(self.ws, q["dir"])}
 
@@ -261,6 +477,33 @@ class App:
     def ai_generate(self, q, b):
         return self._ai(lambda: ai.generate(self.ws, b.get("description", ""), b.get("base_url", ""), b.get("page_html", ""), b.get("variables")))
 
+    def reviews_get(self, q, b):
+        return reviews.pending(self.ws)
+
+    # -- chat with the assistant about one suite
+    def chat_get(self, q, b):
+        return chat.load(self.ws, q["path"])
+
+    def chat_send(self, q, b):
+        try:
+            return self._ai(lambda: chat.send(self.ws, b["path"], b.get("message", ""), b.get("case") or None, b.get("suite")))
+        except WorkspaceError as exc:
+            raise ApiError(404, str(exc))
+
+    def chat_draft(self, q, b):
+        try:
+            return {"drafts": chat.apply_as_drafts(self.ws, b["path"], b["id"], b.get("note", ""))}
+        except (WorkspaceError, revisions.RevisionError) as exc:
+            raise ApiError(400, str(exc))
+
+    def chat_mark(self, q, b):
+        chat.mark(self.ws, b["path"], b["id"], b.get("status", "dismissed"))
+        return {"ok": True}
+
+    def chat_clear(self, q, b):
+        chat.clear(self.ws, q["path"])
+        return {"cleared": True}
+
     def ai_optimize(self, q, b):
         return self._ai(lambda: ai.optimize(self.ws, b["suite"], b.get("goals", ""), b.get("case_id") or None))
 
@@ -271,11 +514,11 @@ class App:
 def routes(app: App) -> list[tuple[str, str, Callable]]:
     return [
         ("GET", "/api/state", app.state), ("PUT", "/api/workspace", app.put_workspace), ("GET", "/api/catalog", lambda q, b: catalog()),
-        ("GET", "/api/tests", app.tests), ("GET", "/api/test", app.get_test), ("PUT", "/api/test", app.put_test),
-        ("POST", "/api/test", app.create_test), ("DELETE", "/api/test", app.delete_test), ("POST", "/api/test/duplicate", app.duplicate_test),
+        ("GET", "/api/tests", app.tests), ("GET", "/api/test", app.get_test), ("PUT", "/api/test", app.put_test), ("POST", "/api/recommendation", app.recommendation),
+        ("POST", "/api/test", app.create_test), ("DELETE", "/api/test", app.delete_test), ("POST", "/api/test/duplicate", app.duplicate_test), ("POST", "/api/test/extract", app.extract_cases),
         ("POST", "/api/validate", app.validate),
         ("POST", "/api/import/inspect", app.import_inspect), ("POST", "/api/import/convert", app.import_convert),
-        ("GET", "/api/environments", app.environments), ("PUT", "/api/environments", app.put_environments), ("POST", "/api/sql/test", app.sql_test),
+        ("GET", "/api/environments", app.environments), ("PUT", "/api/environments", app.put_environments), ("POST", "/api/sql/test", app.sql_test), ("POST", "/api/email/test", app.email_test),
         ("GET", "/api/sessions", app.sessions), ("GET", "/api/session", app.get_session), ("PUT", "/api/session", app.put_session),
         ("DELETE", "/api/session", app.delete_session),
         ("GET", "/api/schedules", app.get_schedules), ("PUT", "/api/schedule", app.put_schedule), ("DELETE", "/api/schedule", app.delete_schedule),
@@ -283,9 +526,17 @@ def routes(app: App) -> list[tuple[str, str, Callable]]:
         ("POST", "/api/schedule/cancel", app.cancel_run),
         ("POST", "/api/scheduler/install", app.scheduler_install), ("POST", "/api/scheduler/uninstall", app.scheduler_uninstall),
         ("POST", "/api/run", app.run_now), ("GET", "/api/run/status", app.run_status),
-        ("GET", "/api/results", app.get_results), ("GET", "/api/result", app.get_result), ("GET", "/api/result/iterations", app.result_iterations), ("GET", "/api/result/log", app.get_result_log),
+        ("GET", "/api/results", app.get_results), ("GET", "/api/result", app.get_result), ("GET", "/api/result/iterations", app.result_iterations), ("GET", "/api/result/log", app.get_result_log), ("GET", "/api/results/view", app.results_view), ("GET", "/api/results/case", app.results_case),
+        ("GET", "/api/results/suite", app.results_suite),
+        ("GET", "/api/revisions", app.revisions_get), ("GET", "/api/revision/case", app.revision_case), ("GET", "/api/revision/manifest", app.revision_manifest),
+        ("GET", "/api/revision/settings", app.revision_settings), ("GET", "/api/revision/diff", app.revision_diff), ("POST", "/api/revision/default", app.revision_default),
+        ("PUT", "/api/revision/inplace", app.revision_inplace), ("POST", "/api/revision/draft", app.revision_draft), ("DELETE", "/api/revision", app.revision_delete), ("GET", "/api/results/analysis", app.results_analysis),
+        ("GET", "/api/groups", app.groups_list), ("GET", "/api/group", app.group_get), ("GET", "/api/group/track", app.group_track), ("POST", "/api/group/preview", app.group_preview),
+        ("PUT", "/api/group", app.group_put), ("DELETE", "/api/group", app.group_delete), ("POST", "/api/group/duplicate", app.group_duplicate), ("POST", "/api/group/manual", app.group_manual),
+        ("POST", "/api/group/close", app.group_close), ("GET", "/api/group/export", app.group_export), ("GET", "/api/results/session", app.results_session), ("GET", "/api/result/case", app.result_case_run),
         ("GET", "/api/ai/status", app.ai_status), ("POST", "/api/ai/test", app.ai_test), ("POST", "/api/ai/generate", app.ai_generate),
-        ("POST", "/api/ai/optimize", app.ai_optimize), ("POST", "/api/ai/convert", app.ai_convert),
+        ("POST", "/api/ai/optimize", app.ai_optimize), ("GET", "/api/reviews", app.reviews_get), ("GET", "/api/chat", app.chat_get), ("POST", "/api/chat", app.chat_send), ("POST", "/api/chat/draft", app.chat_draft),
+        ("POST", "/api/chat/mark", app.chat_mark), ("DELETE", "/api/chat", app.chat_clear), ("POST", "/api/ai/convert", app.ai_convert),
     ]
 
 

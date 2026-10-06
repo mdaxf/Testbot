@@ -37,6 +37,10 @@ def main() -> int:
     suite_parser = subparsers.add_parser("suite", help="Run one test suite (Excel or JSON)")
     suite_parser.add_argument("--suite", required=True, help="Path to a .json or .xlsx suite file")
     suite_parser.add_argument("--env", help="Optional environment block from config/environments.yaml (fallback for base_url/connections; defaults to the suite's own `environment`, and suite-level values win)")
+    suite_parser.add_argument("--case", action="append", metavar="ID",
+                              help="Run only this test case (repeat it, or give a comma list: --case TC-3 --case TC-1). They run in the order given. Default: every case of the file.")
+    suite_parser.add_argument("--tag", action="append", metavar="TAG",
+                              help="Run the test cases that carry this tag (repeat it for several; a case with any of them runs). With --case: those of the listed cases that have a tag.")
     add_common_run_args(suite_parser)
 
     convert_parser = subparsers.add_parser("convert-apriso", help="Convert an Apriso AutomaticTest JSON scenario into a testbot suite")

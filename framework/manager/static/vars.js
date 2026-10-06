@@ -100,6 +100,46 @@ async function sqlTryDialog(query, connName, connString) {
 }
 
 /* ---- Environments page (config/environments.yaml) ---- */
+/* the email settings of one environment: SMTP server, who gets the mail, and when (the password is only ever a variable NAME) */
+function cleanEmail(em) {
+  const o = {};
+  ["smtp_host", "security", "username", "password_env", "from", "on"].forEach((k) => { if (em[k]) o[k] = String(em[k]).trim(); });
+  if (em.smtp_port) o.smtp_port = Number(em.smtp_port);
+  if (em.to && em.to.length) o.to = em.to;
+  if (em.attach_report) o.attach_report = true;
+  return o;
+}
+function cleanEnvs(envs) {
+  const out = deep(envs);
+  Object.values(out).forEach((env) => { if (env.email) { const c = cleanEmail(env.email); if (Object.keys(c).length) env.email = c; else delete env.email; } });
+  return out;
+}
+/* the email fields (server, who, when) and the "send test email" button; scope "settings" = the defaults typed on the Settings page */
+function emailForm(em, name, { scope } = {}) {
+  const pw = "TESTBOT_SMTP_PASSWORD" + (scope === "settings" ? "" : "_" + name.toUpperCase().replace(/[^A-Z0-9]+/g, "_"));
+  return [
+    h("div", { class: "grid g3" }, field("SMTP server", textInput(em, "smtp_host", { placeholder: "smtp.company.com" })), field("Port", numInput(em, "smtp_port")),
+      field("Security", selectInput([["starttls", "STARTTLS (usually port 587)"], ["ssl", "SSL/TLS (usually port 465)"], ["none", "none (plain, internal relay only)"]], em.security || "starttls", (v) => (em.security = v)))),
+    h("div", { class: "grid g3" }, field("User name (optional)", textInput(em, "username")),
+      field("Password variable name", textInput(em, "password_env", { placeholder: pw }), "The NAME of the variable that holds the password – never the password itself."),
+      field("From", textInput(em, "from", { placeholder: "testbot@company.com" }))),
+    h("div", { class: "grid g3" }, field("Recipients", csvInput(em, "to", { placeholder: "lead@company.com, qa@company.com" }), "Separate with commas. A session or group can use its own list."),
+      field("Send when", selectInput([["never", "never"], ["always", "every time a session completes"], ["failure", "only when something did not pass"]], em.on || "never", (v) => (em.on = v))),
+      h("div", { style: { paddingTop: "18px" } }, checkInput(em, "attach_report", "attach the HTML report"))),
+    h("div", { class: "toolbar" }, h("button", { onclick: async () => {
+      const to = await promptBox("Send a test email", "Send one test message to", (em.to || [])[0] || ""); if (!to) return;
+      try { const r = await POST("/api/email/test", { environment: name, scope, email: cleanEmail(em), to }); toast(r.message, r.ok ? "ok" : "bad"); } catch (e) { fail(e); }
+    } }, "Send test email…"), h("span", { class: "muted small" }, "Sends one message to the address you type, using the settings above (not yet saved ones included).")),
+  ];
+}
+function emailSection(name, env) {
+  const em = (env.email = env.email || {});
+  return h("details", { open: !!(em.smtp_host || em.to), style: { marginTop: "10px" } },
+    h("summary", {}, h("b", {}, "Email when a session completes"), " ", h("span", { class: "muted small" }, (em.smtp_host || em.to) ? `${em.on || "default"} → ${(em.to || []).join(", ") || "(recipients from Settings)"}` : "uses the defaults from Settings")),
+    h("p", { class: "muted small" }, "The mail server can be set once under Settings; what you fill in here overrides it for sessions that run in this environment (leave a field empty to keep the default). Nothing is sent unless “Send when” is set here or in Settings. The password is NOT stored: put it in an environment variable (or the .env file) and type that variable's NAME."),
+    ...emailForm(em, name, {}));
+}
+
 routes.environments = async (main) => {
   const { environments } = await GET("/api/environments"); const envs = deep(environments);
   const drivers = S.app.odbc_drivers || [];
@@ -120,7 +160,7 @@ routes.environments = async (main) => {
           h("button", { class: "danger", onclick: async () => { if (await confirmBox("Remove environment", `Remove ${name} from the file?`, "Remove", true)) { delete envs[name]; draw(); } } }, "Remove environment")),
         h("div", { class: "grid g2" }, field("Base URL", textInput(env, "base_url", { placeholder: "http://server/app" }))),
         h("h3", {}, "SQL connections"), conns.length ? h("table", {}, h("tbody", {}, conns)) : h("div", { class: "muted small" }, "None."),
-        h("button", { onclick: async () => { const n = await promptBox("New connection", "Connection name", "default"); if (n) { env.connections[n] = ""; draw(); } } }, "+ Add connection")));
+        h("button", { onclick: async () => { const n = await promptBox("New connection", "Connection name", "default"); if (n) { env.connections[n] = ""; draw(); } } }, "+ Add connection"), emailSection(name, env)));
     });
     if (!Object.keys(envs).length) box.append(h("div", { class: "empty" }, "No environments yet. Suites can carry their own base URL and connections, so environments are optional."));
   };
@@ -128,7 +168,7 @@ routes.environments = async (main) => {
     h("p", { class: "muted" }, "Named settings (base URL + SQL connections) in ", h("span", { class: "mono" }, "config/environments.yaml"), ". A suite can pick one as a fallback; the suite's own values win."),
     drivers.length ? null : h("div", { class: "banner warn" }, "No SQL Server ODBC driver was found on this computer – install “ODBC Driver 17/18 for SQL Server” to try queries here or run SQL steps."),
     h("div", { class: "toolbar" }, h("button", { onclick: async () => { const n = await promptBox("New environment", "Name", "qa"); if (n && !envs[n]) { envs[n] = { base_url: "", connections: {} }; draw(); } } }, "+ Add environment"),
-      h("button", { class: "primary", onclick: async () => { try { await PUT("/api/environments", { environments: envs }); toast("Saved", "ok"); } catch (e) { fail(e); } } }, "Save"),
+      h("button", { class: "primary", onclick: async () => { try { await PUT("/api/environments", { environments: cleanEnvs(envs) }); toast("Saved", "ok"); } catch (e) { fail(e); } } }, "Save"),
       h("span", { class: "muted small" }, "Saving keeps the previous file as environments.yaml.bak")), box);
   draw();
 };

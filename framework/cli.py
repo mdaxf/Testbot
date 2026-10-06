@@ -8,12 +8,16 @@ from pathlib import Path
 import yaml
 
 from framework.actions.sql_actions import SqlConnections
+from pydantic import ValidationError
+
+from framework.loaders.errors import explain_file
 from framework.loaders.excel_loader import load_suite_from_excel
 from framework.loaders.json_loader import load_suite_from_json
 from framework.loaders.session_loader import load_session_plan
 from framework.runner.context_options import parse_viewport_arg
 from framework.runner.load import CONFIRM_ABOVE_WORKERS, LoadSettings, format_summary, resolve_load, run_load
 from framework.runner.orchestrator import Orchestrator
+from framework.runner.selection import SelectionError, parse_case_args, select_cases
 from framework.runner.reporting import (
     write_html_report,
     write_json_result,
@@ -22,7 +26,7 @@ from framework.runner.reporting import (
     write_session_json_result,
     write_session_junit_xml,
 )
-from framework.runner.session_runner import SessionRunner
+from framework.runner.session_runner import SessionRunner, resolve_plan
 
 
 def app_root() -> Path:
@@ -74,7 +78,7 @@ def add_common_run_args(parser: argparse.ArgumentParser) -> None:
 
 def build_orchestrator(
     env_config: dict, args: argparse.Namespace, *, report_dir: str | Path | None = None,
-    extra_vars: dict | None = None, screenshots: str = "all",
+    extra_vars: dict | None = None, screenshots: str = "all", env_name: str | None = None,
 ) -> tuple[Orchestrator, SqlConnections]:
     sql_connections = SqlConnections(env_config.get("connections", {}))
     orchestrator = Orchestrator(
@@ -87,6 +91,7 @@ def build_orchestrator(
         extra_vars=extra_vars,
         screenshots=screenshots,
         mode=getattr(args, "mode", None),
+        env_name=env_name,
     )
     return orchestrator, sql_connections
 
@@ -106,9 +111,10 @@ def _screenshot_mode(args: argparse.Namespace, load: LoadSettings) -> str:
 def _run_suite_once(args: argparse.Namespace, suite, report_dir: Path, extra_vars: dict, screenshots: str):
     env_config = load_environment_config(args.env or suite.environment)
     orchestrator, sql_connections = build_orchestrator(
-        env_config, args, report_dir=report_dir, extra_vars=extra_vars, screenshots=screenshots)
+        env_config, args, report_dir=report_dir, extra_vars=extra_vars, screenshots=screenshots, env_name=args.env or suite.environment)
+    orchestrator.suite_path = Path(args.suite) if getattr(args, "suite", None) else None
     try:
-        result = orchestrator.run_suite(suite)
+        result = orchestrator.run_suite(suite, parse_case_args(getattr(args, "case", None)), parse_case_args(getattr(args, "tag", None)))
     finally:
         sql_connections.close_all()
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -118,10 +124,10 @@ def _run_suite_once(args: argparse.Namespace, suite, report_dir: Path, extra_var
     return result
 
 
-def _run_session_once(args: argparse.Namespace, plan, report_dir: Path, extra_vars: dict, screenshots: str):
+def _run_session_once(args: argparse.Namespace, plan, report_dir: Path, extra_vars: dict, screenshots: str, notify: bool = False):
     env_config = load_environment_config(plan.environment)
     orchestrator, sql_connections = build_orchestrator(
-        env_config, args, report_dir=report_dir, extra_vars=extra_vars, screenshots=screenshots)
+        env_config, args, report_dir=report_dir, extra_vars=extra_vars, screenshots=screenshots, env_name=plan.environment)
     try:
         result = SessionRunner(orchestrator).run(plan)
     finally:
@@ -130,6 +136,10 @@ def _run_session_once(args: argparse.Namespace, plan, report_dir: Path, extra_va
     write_session_html_report(result, report_dir / f"{plan.session_id}.html")
     write_session_junit_xml(result, report_dir / f"{plan.session_id}-junit.xml")
     write_session_json_result(result, report_dir / f"{plan.session_id}-result.json")
+    if notify:                      # an email when the session completes (only for a normal run, not for every load-test iteration)
+        from framework import emailer
+
+        args._email_note = emailer.notify_session(plan, result, env_config, plan.environment, report_dir / f"{plan.session_id}.html")
     return result
 
 
@@ -188,15 +198,38 @@ def setup_logging(args: argparse.Namespace) -> None:
     logs.configure()
 
 
+def _local_time(iso: Optional[str]) -> str:
+    from datetime import datetime, timezone
+
+    try:
+        d = datetime.fromisoformat(str(iso))
+        return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return "?"
+
+
 def run_suite_command(args: argparse.Namespace) -> int:
     setup_logging(args)
-    suite = _load_suite_file(Path(args.suite))
+    try:
+        suite = _load_suite_file(Path(args.suite))
+    except ValidationError as exc:
+        print(f"ERROR: {args.suite} cannot be run -- {len(exc.errors())} problem(s):")
+        for line in explain_file(args.suite, exc):
+            print(f"  - {line}")
+        print("Open the file in the manager's editor (the Validate button marks each step) and fix them.")
+        return 2
+    try:
+        select_cases(suite, parse_case_args(getattr(args, "case", None)), parse_case_args(getattr(args, "tag", None)))     # fail fast on an unknown id, with the list of real ones
+    except SelectionError as exc:
+        print(f"ERROR: {exc}")
+        return 2
     load = resolve_load(args, suite)
     if load.is_load:
         return _run_load(args, load, suite_iteration)
 
     result = _run_suite_once(args, suite, Path(args.report_dir), {"worker_id": 1, "iteration": 1}, _screenshot_mode(args, load))
     print(f"\n{suite.suite_id}: {result.passed}/{len(result.cases)} cases passed")
+    print(f"Final result: {'PASS' if result.cases and result.failed == 0 else 'FAIL'} - finished {_local_time(result.finished_at)}")
     for case in result.cases:
         marker = "PASS" if case.status == "pass" else case.status.upper()
         print(f"  [{marker}] {case.case_id} - {case.title}")
@@ -208,12 +241,22 @@ def run_suite_command(args: argparse.Namespace) -> int:
 def run_session_command(args: argparse.Namespace) -> int:
     setup_logging(args)
     plan = load_session_plan(args.plan)
+    try:
+        resolve_plan(plan)          # fail fast on a wrong file / case id -- also before load-test workers are started
+    except SelectionError as exc:
+        print(f"ERROR: {exc}")
+        return 2
     load = resolve_load(args, plan)
     if load.is_load:
         return _run_load(args, load, session_iteration)
 
-    result = _run_session_once(args, plan, Path(args.report_dir), {"worker_id": 1, "iteration": 1}, _screenshot_mode(args, load))
+    try:
+        result = _run_session_once(args, plan, Path(args.report_dir), {"worker_id": 1, "iteration": 1}, _screenshot_mode(args, load), notify=True)
+    except SelectionError as exc:       # a wrong file or case id in the plan: reported before any browser starts
+        print(f"ERROR: {exc}")
+        return 2
     print(f"\n{plan.session_id}: {result.passed_cases}/{result.total_cases} cases passed across {len(result.suites)} file(s)")
+    print(f"Final result: {'PASS' if result.total_cases and all(s.failed == 0 for s in result.suites) else 'FAIL'} - finished {_local_time(result.finished_at)}")
     for suite in result.suites:
         for case in suite.cases:
             marker = "PASS" if case.status == "pass" else case.status.upper()
@@ -221,5 +264,7 @@ def run_session_command(args: argparse.Namespace) -> int:
     if result.stopped_early:
         print(f"\nSession stopped early after a failure in file: {result.stopped_after_file}")
     print(f"\nReports written to {Path(args.report_dir).resolve()}")
+    if getattr(args, "_email_note", None):
+        print(args._email_note)
 
     return 0 if all(s.failed == 0 for s in result.suites) else 1

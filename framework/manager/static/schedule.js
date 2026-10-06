@@ -9,7 +9,7 @@ const loadFields = (obj, onchange) => h("div", { class: "grid g4" }, field("Work
 routes.sessions = async (main, params) => {
   const [{ sessions }, { tests }] = await Promise.all([GET("/api/sessions"), GET("/api/tests")]);
   const suiteOptions = tests.filter((t) => ["testbot", "testbot-excel"].includes(t.format)).map((t) => t.path);
-  main.append(h("h1", {}, "Sessions"), h("p", { class: "muted" }, "A session runs several test files in a fixed order. A file can continue in the same logged-in browser as the previous one."),
+  main.append(h("h1", {}, "Sessions"), h("p", { class: "muted" }, "A session runs whole test suites, or just some of their test cases, in the order you choose. An entry can continue in the same logged-in browser as the previous one."),
     h("div", { class: "toolbar" }, h("button", { class: "primary", onclick: async () => {
       const n = await promptBox("New session", "File name", "my-session"); if (!n) return;
       go("sessions", { path: "sessions/" + n.replace(/\.ya?ml$/i, "") + ".yaml", isnew: 1 }); } }, "+ New session")),
@@ -19,29 +19,72 @@ routes.sessions = async (main, params) => {
       [h("tr", {}, h("td", { colspan: 5, class: "empty" }, "No sessions yet."))])));
   if (!params.path) return;
   let plan; if (params.isnew) plan = { session_id: params.path.split("/").pop().replace(/\.ya?ml$/i, "").toUpperCase(), session_name: "New session", files: [] }; else plan = (await GET("/api/session?" + q({ path: params.path }))).plan;
-  plan.files = plan.files || []; const opt = { workers: plan.workers, iterations: plan.iterations, duration: plan.duration_s, ramp_up: plan.ramp_up_s };
+  plan.files = plan.files || []; plan.notify = plan.notify || {}; const opt = { workers: plan.workers, iterations: plan.iterations, duration: plan.duration_s, ramp_up: plan.ramp_up_s };
   const filesBox = h("div", {});
+  const previewBox = h("div", { class: "card" });
   const drawFiles = () => {
     clear(filesBox);
-    plan.files.forEach((f, i) => filesBox.append(h("div", { class: "card", style: { padding: "8px 10px", marginBottom: "6px" } }, h("div", { class: "toolbar", style: { margin: 0 } },
-      h("b", {}, (i + 1) + "."), selectInput(suiteOptions, f.path, (v) => (f.path = v), { blank: "(choose a test file)" }),
-      i > 0 ? checkInput(f, "shares_state_with_previous", "same browser as the previous file (stay logged in)") : h("span", { class: "muted small" }, "starts a fresh browser"),
-      h("span", { class: "grow" }), h("button", { class: "icon", disabled: i === 0, onclick: () => { [plan.files[i - 1], plan.files[i]] = [plan.files[i], plan.files[i - 1]]; drawFiles(); } }, "↑"),
-      h("button", { class: "icon", disabled: i === plan.files.length - 1, onclick: () => { [plan.files[i + 1], plan.files[i]] = [plan.files[i], plan.files[i + 1]]; drawFiles(); } }, "↓"),
-      h("button", { class: "icon danger", onclick: () => { plan.files.splice(i, 1); drawFiles(); } }, "✕")))));
-    if (!plan.files.length) filesBox.append(h("div", { class: "muted small" }, "No files yet."));
+    plan.files.forEach((f, i) => {
+      const summary = h("span", { class: "small" }, f.path ? casesSummary(f.cases) : "");
+      const dup = f.cases && new Set(f.cases).size !== f.cases.length;     // a case listed twice (edited in the file): keep it as it is
+      if (f.path) suiteCases(f.path).then((cs) => { summary.textContent = casesSummary(f.cases, cs.length); }, () => { summary.textContent = "(file not found)"; });
+      filesBox.append(h("div", { class: "card", style: { padding: "8px 10px", marginBottom: "6px" } }, h("div", { class: "toolbar", style: { margin: 0 } },
+        h("b", {}, (i + 1) + "."), selectInput(suiteOptions, f.path, (v) => { f.path = v; f.cases = undefined; drawFiles(); }, { blank: "(choose a test file)" }),
+        summary, h("button", { disabled: !f.path || dup, title: dup ? "This entry lists a case more than once; edit the session file to change it" : "Run the whole suite, or only some of its test cases, in the order you choose",
+          onclick: async () => { const r = await chooseCasesDialog(f.path, f.cases); if (r) { f.cases = r.cases || undefined; drawFiles(); } } }, "Cases…"),
+        i > 0 ? checkInput(f, "shares_state_with_previous", "same browser as the previous entry (stay logged in)") : h("span", { class: "muted small" }, "starts a fresh browser"),
+        h("span", { class: "grow" }),
+        h("label", { class: "small muted" }, "if a case fails: "), selectInput([["stop_session", "stop the session"], ["stop_file", "stop this file, go on"], ["continue", "keep going"]], f.on_fail || "", (v) => (f.on_fail = v || undefined), { blank: "(session default)" }),
+        h("button", { class: "icon", disabled: i === 0, onclick: () => { [plan.files[i - 1], plan.files[i]] = [plan.files[i], plan.files[i - 1]]; drawFiles(); } }, "↑"),
+        h("button", { class: "icon", disabled: i === plan.files.length - 1, onclick: () => { [plan.files[i + 1], plan.files[i]] = [plan.files[i], plan.files[i + 1]]; drawFiles(); } }, "↓"),
+        h("button", { class: "icon danger", onclick: () => { plan.files.splice(i, 1); drawFiles(); } }, "✕"))));
+    });
+    if (!plan.files.length) filesBox.append(h("div", { class: "muted small" }, "No entries yet. Use “Add to session…” to add a whole test suite or some of its test cases."));
+    drawPreview();
+  };
+  /* the final run order, case by case */
+  const drawPreview = async () => {
+    const rows = [];
+    for (const [i, f] of plan.files.entries()) {
+      if (!f.path) continue;
+      let ids; try { ids = f.cases && f.cases.length ? f.cases : (await suiteCases(f.path)).map((c) => c.id); } catch (e) { ids = ["(file not found)"]; }
+      rows.push(h("div", { class: "small" }, h("b", {}, `${i + 1}. ${f.path}`), h("span", { class: "muted" }, f.shares_state_with_previous && i > 0 ? "  (same browser)" : "  (fresh browser)"), " → ", ids.join("  ›  ")));
+    }
+    clear(previewBox).append(h("div", { class: "muted small", style: { marginBottom: "4px" } }, "Run order"), rows.length ? rows : h("div", { class: "muted small" }, "–"));
+  };
+  const addEntryDialog = () => {
+    const f = { path: suiteOptions[0] || "", same: false }, chooserBox = h("div", {}); let chooser = null;
+    const load = async () => { clear(chooserBox); chooser = null; if (!f.path) return; try { chooser = await casesChooser(f.path, []); chooserBox.append(chooser.node); } catch (e) { chooserBox.append(h("div", { class: "banner bad" }, e.message)); } };
+    load();
+    modal({ title: "Add to the session", wide: true,
+      body: h("div", {}, field("Test suite (file)", selectInput(suiteOptions, f.path, (v) => { f.path = v; load(); })), plan.files.length ? h("div", { style: { marginBottom: "10px" } }, checkInput(f, "same", "continue in the same browser as the previous entry (stay logged in)")) : null,
+        h("b", {}, "What to add"), h("div", { style: { marginTop: "6px" } }, chooserBox)),
+      buttons: [{ label: "Cancel" }, { label: "Add", primary: true, onclick: () => {
+        if (!chooser) { toast("Choose a test suite", "bad"); return false; }
+        const ids = chooser.get(); if (ids && !ids.length) { toast("Tick at least one test case, or choose the whole suite", "bad"); return false; }
+        const entry = { path: f.path }; if (ids) entry.cases = ids; if (f.same && plan.files.length) entry.shares_state_with_previous = true;
+        plan.files.push(entry); drawFiles(); } }] });
   };
   drawFiles();
   const save = async () => {
     const out = { ...plan }; ["workers", "iterations", "duration_s", "ramp_up_s"].forEach((k) => delete out[k]);
     if (opt.workers) out.workers = opt.workers; if (opt.iterations) out.iterations = opt.iterations; if (opt.duration) out.duration_s = opt.duration; if (opt.ramp_up) out.ramp_up_s = opt.ramp_up;
     if (!out.environment) delete out.environment;
-    out.files = out.files.filter((f) => f.path).map((f) => { const o = { path: f.path }; if (f.shares_state_with_previous) o.shares_state_with_previous = true; return o; });
+    out.files = out.files.filter((f) => f.path).map((f) => { const o = { path: f.path }; if (f.cases && f.cases.length) o.cases = f.cases; if (f.shares_state_with_previous) o.shares_state_with_previous = true; if (f.on_fail) o.on_fail = f.on_fail; return o; });
+    if (!out.on_fail || out.on_fail === "stop_session") delete out.on_fail;
+    delete out.notify; const nf = plan.notify || {}, nn = {}; if (nf.on) nn.on = nf.on; if (nf.to && nf.to.length) nn.to = nf.to; if (nf.attach_report) nn.attach_report = true; if (Object.keys(nn).length) out.notify = nn;
     try { const r = await PUT("/api/session", { path: params.path, plan: out }); toast("Saved", "ok"); return r.path; } catch (e) { fail(e); return null; }
   };
   main.append(h("h2", {}, "Edit " + params.path), h("div", { class: "card" }, h("div", { class: "grid g3" },
     field("Session ID", textInput(plan, "session_id")), field("Name", textInput(plan, "session_name")), field("Environment (optional)", textInput(plan, "environment")))),
-    h("h3", {}, "Test files, in order"), filesBox, h("button", { onclick: () => { plan.files.push({ path: "" }); drawFiles(); } }, "+ Add file"),
+    h("h3", {}, "What runs, in order"), filesBox, h("button", { class: "primary", onclick: addEntryDialog }, "+ Add to session…"), previewBox,
+    h("div", { class: "card", style: { marginTop: "10px" } }, field("If a test case fails", selectInput([["stop_session", "Stop the session after that file (default)"], ["stop_file", "Stop that file, go on with the next entry"], ["continue", "Keep going, never stop early"]], plan.on_fail || "stop_session", (v) => (plan.on_fail = v)),
+      "“Stop the session” lets the file's remaining cases finish (per the file's own setting) and then stops before the next entry. An entry can override this.")),
+    h("div", { class: "card" }, h("h3", { style: { marginTop: 0 } }, "Email when the session completes"),
+      h("div", { class: "grid g3" }, field("Send", selectInput([["always", "every time"], ["failure", "only when something did not pass"], ["never", "never"]], plan.notify.on || "", (v) => (plan.notify.on = v), { blank: "(as the environment says)" })),
+        field("Recipients (replace the environment's)", csvInput(plan.notify, "to", { placeholder: "leave empty to use the environment's list" })),
+        h("div", { style: { paddingTop: "18px" } }, checkInput(plan.notify, "attach_report", "attach the HTML report"))),
+      h("p", { class: "muted small" }, "The mail server comes from the environment of this session (the Environment field above): set it up on the Environments & SQL page. Nothing is sent unless that environment or this session asks for it.")),
     h("h3", {}, "Load test (optional)"), loadFields(opt, () => {}),
     h("div", { class: "toolbar", style: { marginTop: "14px" } }, h("button", { class: "primary", onclick: save }, "Save"),
       h("button", { onclick: async () => { const p = await save(); if (p) runDialog(p, "session", plan.environment || ""); } }, "Save & run ▶")));
@@ -62,7 +105,8 @@ function triggerSummary(t) {
 }
 
 routes.schedules = async (main, params) => {
-  const [{ schedules, scheduler }, { tests }, { sessions }, { environments }] = await Promise.all([GET("/api/schedules"), GET("/api/tests"), GET("/api/sessions"), GET("/api/environments")]);
+  const [{ schedules, scheduler }, { tests }, { sessions }, { environments }, { groups }] = await Promise.all([GET("/api/schedules"), GET("/api/tests"), GET("/api/sessions"), GET("/api/environments"), GET("/api/groups")]);
+  const groupOptions = groups.map((g) => [g.id, `${g.name} (${g.total} test cases)`]);
   const suitePaths = tests.filter((t) => ["testbot", "testbot-excel"].includes(t.format)).map((t) => t.path), sessionPaths = sessions.map((s) => s.path);
   const banner = scheduler.running
     ? h("div", { class: "banner ok" }, `The scheduler is running (process ${scheduler.pid}, last check ${fmtTime(scheduler.last_beat)}). Scheduled tests start automatically.`)
@@ -76,7 +120,7 @@ routes.schedules = async (main, params) => {
       const last = s.status.last_run;
       return h("tr", { class: "clickable", onclick: () => go("schedules", { id: s.id }) },
         h("td", {}, h("b", {}, s.name || s.id), h("div", { class: "small muted" }, s.id), s.enabled === false ? badge("disabled", "warn") : null),
-        h("td", {}, triggerSummary(s.trigger)), h("td", { class: "small" }, (s.items || []).map((i, n) => h("div", {}, `${n + 1}. ${i.path}`))),
+        h("td", {}, triggerSummary(s.trigger)), h("td", { class: "small" }, (s.items || []).map((i, n) => h("div", {}, `${n + 1}. ${i.type === "group" ? "group " + i.path + (i.mode === "remaining" ? " (not passed yet)" : "") : i.path}`))),
         h("td", { class: "small" }, s.status.next_run ? fmtTime(s.status.next_run) : "–"),
         h("td", { class: "small" }, s.status.running ? badge("running…", "warn") : (last ? [statusBadge(last.status), " ", fmtTime(last.started)] : "never")),
         h("td", { onclick: (e) => e.stopPropagation(), style: { whiteSpace: "nowrap" } }, h("button", { class: "icon", title: "Run now", onclick: () => runScheduleNow(s) }, "▶"),
@@ -108,9 +152,12 @@ routes.schedules = async (main, params) => {
       const sync = () => Object.assign(it.options, { workers: opts.workers, iterations: opts.iterations, duration: opts.duration, ramp_up: opts.ramp_up });
       itemsBox.append(h("div", { class: "card", style: { padding: "10px" } },
         h("div", { class: "toolbar", style: { margin: 0 } }, h("b", {}, (i + 1) + "."),
-          selectInput([["suite", "Test file"], ["session", "Session"]], it.type, (v) => { it.type = v; it.path = ""; drawItems(); }),
-          selectInput(it.type === "session" ? sessionPaths : suitePaths, it.path, (v) => (it.path = v), { blank: "(choose)" }),
-          selectInput(Object.keys(environments), it.env || "", (v) => (it.env = v), { blank: "(no environment)" }),
+          selectInput([["suite", "Test file"], ["session", "Session"], ["group", "Test group"]], it.type, (v) => { it.type = v; it.path = ""; it.cases = undefined; it.mode = v === "group" ? "all" : undefined; drawItems(); }),
+          selectInput(it.type === "session" ? sessionPaths : (it.type === "group" ? groupOptions : suitePaths), it.path, (v) => { it.path = v; it.cases = undefined; drawItems(); }, { blank: "(choose)" }),
+          it.type === "group" ? selectInput([["all", "all its test cases"], ["remaining", "only the cases not passed yet"]], it.mode || "all", (v) => (it.mode = v)) : null,
+          it.type === "suite" ? h("button", { disabled: !it.path, title: "Run the whole file, or only some of its test cases, in the order you choose",
+            onclick: async () => { const r = await chooseCasesDialog(it.path, it.cases); if (r) { it.cases = r.cases || undefined; drawItems(); } } }, "Cases: " + (it.cases && it.cases.length ? it.cases.join(", ") : "all")) : null,
+          it.type === "suite" ? selectInput(Object.keys(environments), it.env || "", (v) => (it.env = v), { blank: "(no environment)" }) : null,
           checkInput(it, "stop_on_failure", "stop the schedule if this fails"),
           h("span", { class: "grow" }), h("button", { class: "icon", disabled: i === 0, onclick: () => { [sched.items[i - 1], sched.items[i]] = [sched.items[i], sched.items[i - 1]]; drawItems(); } }, "↑"),
           h("button", { class: "icon", disabled: i === sched.items.length - 1, onclick: () => { [sched.items[i + 1], sched.items[i]] = [sched.items[i], sched.items[i + 1]]; drawItems(); } }, "↓"),
@@ -140,7 +187,7 @@ routes.schedules = async (main, params) => {
 
 function cleanSchedule(s) {
   const o = deep(s);
-  (o.items || []).forEach((it) => { const op = it.options || {}; ["workers", "iterations", "duration", "ramp_up"].forEach((k) => { if (!op[k]) delete op[k]; }); ["screenshots", "mode"].forEach((k) => { if (!op[k]) delete op[k]; }); if (!op.headed) delete op.headed; if (!op.confirm_load) delete op.confirm_load; it.options = op; if (!it.env) delete it.env; if (!it.timeout_s) delete it.timeout_s; if (!it.stop_on_failure) delete it.stop_on_failure; });
+  (o.items || []).forEach((it) => { const op = it.options || {}; ["workers", "iterations", "duration", "ramp_up"].forEach((k) => { if (!op[k]) delete op[k]; }); ["screenshots", "mode"].forEach((k) => { if (!op[k]) delete op[k]; }); if (!op.headed) delete op.headed; if (!op.confirm_load) delete op.confirm_load; it.options = op; if (it.type !== "group") delete it.mode; if (!it.cases || !it.cases.length || it.type !== "suite") delete it.cases; if (!it.tags || !it.tags.length || it.type !== "suite") delete it.tags; if (!it.env) delete it.env; if (!it.timeout_s) delete it.timeout_s; if (!it.stop_on_failure) delete it.stop_on_failure; });
   if (!o.stop_on_failure) delete o.stop_on_failure;
   return o;
 }

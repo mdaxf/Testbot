@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
-from framework import logs
+from framework import learn, logs
 from framework.agent.config import AgentConfig, Profile
 from framework.agent.loop import AgentOutcome, AgentRun
 from framework.agent.policy import is_secret_name
@@ -136,6 +136,15 @@ def run_agent_case(orch: Any, page: Any, case: TestCase, ctx: VariableContext, s
             gp = folder / f"{re.sub(r'[^A-Za-z0-9_.-]+', '_', case.id)}.json"
             gp.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
             script_note = f" | generated script: {gp.relative_to(Path(orch._run_dir).parent).as_posix()}"
+            if cfg.learn and outcome.verdict.status == "pass":      # the agent's findings go onto the test case as a recommendation to review
+                suite_file = getattr(orch, "suite_path", None)
+                rec = learn.build(doc["cases"][0]["steps"], doc.get("variables"), run=Path(orch._run_dir).name, model=_model_name(cfg), verdict="pass",
+                                  base_revision=getattr(case, "revision", None), notes=outcome.notes)
+                if suite_file and learn.attach(Path(suite_file), re.split(r"~\d+$", case.id)[0], rec):
+                    script_note += " | recommendation saved on the test case"
+                    log.info("case %s: the agent's steps (%d) were saved as a recommendation on the test case, for review", case.id, len(rec["steps"]))
+                else:
+                    log.warning("case %s: the agent passed but its recommendation could not be saved (the suite is not a .json file, or the case was not found)", case.id)
     except Exception as exc:  # noqa: BLE001 - export problems never change the verdict
         script_note = f" | script export failed: {exc}"
     v = outcome.verdict

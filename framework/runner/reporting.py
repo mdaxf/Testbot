@@ -122,14 +122,69 @@ def _case_block(case: CaseResult) -> str:
     )
 
 
+def _utc(text) -> str:
+    """ISO time -> '2026-10-03 14:05:09 UTC' (testbot writes UTC; the manager shows local time)."""
+    from datetime import datetime, timezone
+
+    try:
+        d = datetime.fromisoformat(str(text))
+        return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    except (TypeError, ValueError):
+        return str(text or "")
+
+
+def _seconds(start, end) -> str:
+    from datetime import datetime
+
+    try:
+        return f"{(datetime.fromisoformat(str(end)) - datetime.fromisoformat(str(start))).total_seconds():.1f} s"
+    except (TypeError, ValueError):
+        return ""
+
+
+def _final_status(cases: list) -> tuple[str, str]:
+    if not cases:
+        return "NO CASES", "#57606a"
+    if all(c.status == "pass" for c in cases):
+        return "PASS", "#1a7f37"
+    return ("FAIL", "#cf222e") if all(c.status in ("pass", "fail") for c in cases) else ("ERROR", "#bc4c00")
+
+
+def _case_summary_table(cases: list) -> str:
+    rows = "".join(
+        f"<tr><td>{c.case_id}</td><td>{c.title}</td><td style=\"color:{_CASE_COLORS.get(c.status, '#000000')}\">{c.status.upper()}</td>"
+        f"<td>{_utc(c.finished_at) if c.finished_at else ''}</td><td>{c.duration_ms / 1000:.1f} s</td><td>{len(c.steps)}</td></tr>"
+        for c in cases)
+    return ("<table border='1' cellpadding='4' cellspacing='0'><tr><th>Test case</th><th>Title</th><th>Final result</th><th>Finished</th><th>Duration</th><th>Steps</th></tr>"
+            f"{rows}</table>")
+
+
+def _final_block(title: str, cases: list, started, finished) -> str:
+    label, color = _final_status(cases)
+    counts = ", ".join(f"{n} {name}" for name, n in (
+        ("passed", sum(1 for c in cases if c.status == "pass")), ("failed", sum(1 for c in cases if c.status == "fail")),
+        ("error", sum(1 for c in cases if c.status == "error")), ("inconclusive", sum(1 for c in cases if c.status == "inconclusive"))) if n)
+    return (f"<h2 style=\"color:{color}\">{title}: {label}</h2>"
+            f"<p>Final test: <b>{_utc(finished or started)}</b> (started {_utc(started)}, duration {_seconds(started, finished)}) &mdash; {len(cases)} test case(s): {counts or 'none'}</p>"
+            f"{_case_summary_table(cases) if cases else ''}")
+
+
+def _selection_note(result: SuiteResult) -> str:
+    if not result.selected:
+        return ""
+    return f"<p>Selected {len(result.selected)} of {result.cases_in_file} case(s), in this order: {', '.join(result.selected)}</p>"
+
+
 def write_html_report(result: SuiteResult, path: str | Path) -> None:
     body = "".join(_case_block(case) for case in result.cases)
     html = (
         f"<html><head><title>Test Report - {result.suite_id}</title></head><body>"
         f"<h1>{result.suite_id} ({result.environment})</h1>"
         f"<p>Started: {result.started_at} — Finished: {result.finished_at}</p>"
+        f"{_final_block('Final result', result.cases, result.started_at, result.finished_at)}"
         f"<p>Passed: {result.passed} / {len(result.cases)}</p>"
-        f"{body}{_footer()}</body></html>"
+        f"{_selection_note(result)}"
+        f"<h2>Steps</h2>{body}{_footer()}</body></html>"
     )
     Path(path).write_text(html, encoding="utf-8")
 
@@ -140,7 +195,9 @@ def write_session_html_report(result: SessionResult, path: str | Path) -> None:
         body = "".join(_case_block(case) for case in suite.cases)
         sections.append(
             f"<h2>{suite.suite_id} ({suite.environment})</h2>"
+            f"{_final_block('Result of this file', suite.cases, suite.started_at, suite.finished_at)}"
             f"<p>Passed: {suite.passed} / {len(suite.cases)}</p>"
+            f"{_selection_note(suite)}"
             f"{body}"
         )
 
@@ -154,6 +211,7 @@ def write_session_html_report(result: SessionResult, path: str | Path) -> None:
         f"<html><head><title>Session Report - {result.session_id}</title></head><body>"
         f"<h1>{result.session_id} — {result.session_name}</h1>"
         f"<p>Started: {result.started_at} — Finished: {result.finished_at}</p>"
+        f"{_final_block('Final result of the session', [c for s in result.suites for c in s.cases], result.started_at, result.finished_at)}"
         f"<p>Passed: {result.passed_cases} / {result.total_cases} cases across {len(result.suites)} file(s)</p>"
         f"{stopped_notice}"
         f"{''.join(sections)}{_footer()}</body></html>"

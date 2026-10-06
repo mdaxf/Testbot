@@ -15,6 +15,8 @@ from typing import Any, Optional
 
 from pydantic import ValidationError
 
+from framework import revisions, suitefix
+from framework.loaders.errors import friendly
 from framework.loaders.excel_loader import load_suite_from_excel
 from framework.manager.catalog import BUILTIN_VARIABLES
 from framework.manager.workspace import Workspace, WorkspaceError
@@ -102,12 +104,13 @@ def list_tests(ws: Workspace) -> list[dict[str, Any]]:
     if not base.exists():
         return out
     for path in sorted(base.rglob("*")):
-        if path.is_file() and path.suffix.lower() in SUITE_EXTENSIONS and not path.name.startswith("~$") and ".testbot-bak" not in path.parts:
+        if path.is_file() and path.suffix.lower() in SUITE_EXTENSIONS and not path.name.startswith("~$") and ".testbot-bak" not in path.parts and revisions.DIR_NAME not in path.parts:
             if path.name.endswith(".bak"):
                 continue
             st = path.stat()
             out.append({"path": ws.rel("test_cases", path), "name": path.name, "folder": ws.rel("test_cases", path.parent) if path.parent != base else "",
-                        "modified": st.st_mtime, "size": st.st_size, **_summarise(path)})
+                        "modified": st.st_mtime, "size": st.st_size, **_summarise(path),
+                        "history": revisions.quick_counts(base, ws.rel("test_cases", path)) if path.suffix.lower() == ".json" else None})
     return out
 
 
@@ -122,7 +125,16 @@ def read_test(ws: Workspace, rel: str) -> dict[str, Any]:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(data, dict) or not isinstance(data.get("cases"), list):
             raise WorkspaceError("This file is not in testbot format. Use Import to map it.")
-        return {"path": rel, "suite": data, "mtime": mtime, "source": "json", "save_as": rel}
+        out = {"path": rel, "suite": data, "mtime": mtime, "source": "json", "save_as": rel}
+        try:
+            root = ws.dir("test_cases")
+            rel_t = ws.rel("test_cases", path)
+            revisions.sync(root, rel_t)                         # a change made outside testbot becomes a revision
+            out["revisions"] = revisions.editor_info(root, rel_t)
+        except Exception as exc:  # noqa: BLE001 - the history must never stop a file from opening
+            out["revisions"] = None
+            out["revisions_error"] = str(exc)[:200]
+        return out
     suite = clean_suite_dict(load_suite_from_excel(path))
     return {"path": rel, "suite": suite, "mtime": mtime, "source": "excel",
             "save_as": str(Path(rel).with_suffix(".json").as_posix())}
@@ -135,7 +147,8 @@ def _write_json_atomic(path: Path, data: Any) -> None:
     os.replace(tmp, path)
 
 
-def save_test(ws: Workspace, rel: str, suite: dict[str, Any], base_mtime: Optional[float] = None, *, overwrite: bool = True) -> dict[str, Any]:
+def save_test(ws: Workspace, rel: str, suite: dict[str, Any], base_mtime: Optional[float] = None, *, overwrite: bool = True,
+              source: str = "manual", note: str = "") -> dict[str, Any]:
     """Save `suite` as JSON at `rel` (an .xlsx source is saved as a sibling .json). Steps are renumbered.
     `base_mtime` = the modified time the browser loaded; if the file changed since, raise ConflictError."""
     if not isinstance(suite, dict) or not isinstance(suite.get("cases"), list):
@@ -151,8 +164,14 @@ def save_test(ws: Workspace, rel: str, suite: dict[str, Any], base_mtime: Option
             raise ConflictError("The file was changed on disk after you opened it. Reload it (or save under another name).")
         backup = path.with_name(path.name + ".bak")
         shutil.copy2(path, backup)  # one-step undo for hand-written files
-    _write_json_atomic(path, renumber(suite))
-    return {"path": ws.rel("test_cases", path), "mtime": path.stat().st_mtime}
+    normalized = suitefix.normalize_suite(suite)
+    info: dict[str, Any] = {}
+    try:
+        info = revisions.save_default(ws.dir("test_cases"), ws.rel("test_cases", path), renumber(suite), source=source, note=note)   # writes the file too
+    except Exception as exc:  # noqa: BLE001 - a problem with the history must never lose the user's save
+        _write_json_atomic(path, renumber(suite))
+        info = {"revision_error": str(exc)[:200]}
+    return {"path": ws.rel("test_cases", path), "mtime": path.stat().st_mtime, "normalized": normalized, "revision": info}
 
 
 def new_suite(suite_id: str, name: str, base_url: str = "") -> dict[str, Any]:
@@ -210,7 +229,8 @@ def validate(suite: dict[str, Any]) -> list[dict[str, Any]]:
         TestSuite.model_validate(copy.deepcopy(suite))
     except ValidationError as exc:
         for err in exc.errors():
-            problems.append({"level": "error", "message": f"{err['msg']}", **_location(tuple(err["loc"]))})
+            where = _location(tuple(err["loc"]))
+            problems.append({"level": "error", "message": (where.get("field", "") + " " if where.get("field") else "") + friendly(err), **where})
     except Exception as exc:  # noqa: BLE001
         problems.append({"level": "error", "message": str(exc)})
 
@@ -267,3 +287,31 @@ def validate(suite: dict[str, Any]) -> list[dict[str, Any]]:
             if action == "set_var" and isinstance(cap, dict) and cap.get("var"):
                 known.add(cap["var"])
     return problems
+
+
+def extract_cases(ws: Workspace, rel: str, ids: list[str], new_rel: str) -> dict[str, Any]:
+    """Copy some test cases of a file into a NEW test file (the suite settings -- base_url, variables, connections ... -- come along).
+    Cases keep the order given; prerequisites (`depends_on`) are copied too, so the new file runs on its own. Never overwrites."""
+    from framework.runner.selection import REPEAT_SEPARATOR, select_cases
+
+    if not ids:
+        raise ValueError("choose at least one test case to copy")
+    src = read_test(ws, rel)["suite"]
+    selection = select_cases(TestSuite.model_validate(copy.deepcopy(src)), ids)
+    by_id = {c.get("id"): c for c in src.get("cases", [])}
+    wanted: list[str] = []
+    for case in selection:
+        base = case.id.split(REPEAT_SEPARATOR)[0] if REPEAT_SEPARATOR in case.id and case.id not in by_id else case.id
+        if base not in wanted:
+            wanted.append(base)
+    stem = Path(new_rel).stem
+    suite = {k: copy.deepcopy(v) for k, v in src.items() if k != "cases"}
+    suite["suite_id"] = re.sub(r"[^A-Za-z0-9_-]+", "-", stem).upper()[:40] or "SELECTED"
+    suite["suite_name"] = f"{src.get('suite_name') or src.get('suite_id')} - {len(wanted)} selected case(s)"
+    suite["cases"] = [copy.deepcopy(by_id[i]) for i in wanted]
+    try:
+        ws.safe_path("test_cases", new_rel if new_rel.lower().endswith(".json") else new_rel + ".json")
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(str(exc))
+    saved = save_test(ws, new_rel if new_rel.lower().endswith(".json") else new_rel + ".json", suite, overwrite=False)
+    return {**saved, "cases": wanted, "prerequisites_added": [c for c in selection.added]}

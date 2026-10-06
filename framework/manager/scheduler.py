@@ -67,7 +67,7 @@ def run_loop(ws: Workspace, stop: Optional[threading.Event] = None, log=print) -
             st["running"] = False
             schedules.write_state(ws, s["id"], st)
     log(f"testbot scheduler started for {ws.file} (checking every {POLL_SECONDS}s). Press Ctrl+C to stop.")
-    schedules.log.info("scheduler started for %s (checking every %ds)", ws.file, POLL_SECONDS)
+    schedules.slog.info("scheduler started for %s (checking every %ds)", ws.file, POLL_SECONDS)
     active: list[threading.Thread] = []
     while not stop.is_set():
         _write_heartbeat(ws, started)
@@ -80,7 +80,7 @@ def run_loop(ws: Workspace, stop: Optional[threading.Event] = None, log=print) -
             active = [t for t in active if t.is_alive()]
         except Exception as exc:  # noqa: BLE001 - one bad schedule file must not stop the service
             log(f"scheduler error: {exc}")
-            schedules.log.error("scheduler error: %s", exc)
+            schedules.slog.error("scheduler error: %s", exc)
         stop.wait(POLL_SECONDS)
     _heartbeat_file(ws).unlink(missing_ok=True)
 
