@@ -23,6 +23,7 @@ import copy
 import difflib
 import json
 import os
+import re
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,12 +45,40 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _check_rel(root: Path, rel: str) -> Path:
+    """The suite file `rel` inside `root` (the test-cases folder); a path that escapes it is refused."""
+    base = Path(root).resolve()
+    target = (base / str(rel)).resolve()
+    if base not in target.parents or DIR_NAME in target.relative_to(base).parts:
+        raise RevisionError("the suite path is outside the test-cases folder")
+    return target
+
+
 def _dir(root: Path, rel: str) -> Path:
+    _check_rel(root, rel)
     return Path(root) / DIR_NAME / rel
 
 
 def _safe(name: Any) -> str:
-    return urllib.parse.quote(str(name), safe="")
+    q = urllib.parse.quote(str(name), safe="")
+    return q.replace(".", "%2E") if q in (".", "..") else q          # never a '.' / '..' folder
+
+
+def _rev_no(rev: Any) -> int:
+    """A case revision number (1, 2, 3 ...); anything else is refused, so it can never become a path."""
+    try:
+        n = int(str(rev).strip())
+    except (TypeError, ValueError):
+        raise RevisionError(f"'{str(rev)[:40]}' is not a revision number") from None
+    if n < 1:
+        raise RevisionError(f"'{n}' is not a revision number")
+    return n
+
+
+def _settings_id(sid: Any) -> str:
+    if not re.match(r"^s[0-9]{1,9}$", str(sid)):
+        raise RevisionError(f"'{str(sid)[:40]}' is not a settings revision (s1, s2 ...)")
+    return str(sid)
 
 
 def _write(path: Path, data: Any) -> None:
@@ -64,11 +93,11 @@ def _read(path: Path) -> Any:
 
 
 def _case_file(root: Path, rel: str, cid: str, rev: Any) -> Path:
-    return _dir(root, rel) / "cases" / _safe(cid) / f"{rev}.json"
+    return _dir(root, rel) / "cases" / _safe(cid) / f"{_rev_no(rev)}.json"
 
 
 def _settings_file(root: Path, rel: str, sid: str) -> Path:
-    return _dir(root, rel) / "settings" / f"{sid}.json"
+    return _dir(root, rel) / "settings" / f"{_settings_id(sid)}.json"
 
 
 def _core_case(case: dict[str, Any]) -> dict[str, Any]:
@@ -141,7 +170,7 @@ def _new_manifest(idx: dict[str, Any], mapping: dict[str, int], order: list[str]
 
 
 def _read_suite_file(root: Path, rel: str) -> dict[str, Any]:
-    p = Path(root) / rel
+    p = _check_rel(root, rel)
     data = _read(p)
     if not isinstance(data, dict) or not isinstance(data.get("cases"), list):
         raise RevisionError(f"'{rel}' is not a testbot suite")

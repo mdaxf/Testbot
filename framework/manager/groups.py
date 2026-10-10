@@ -27,10 +27,10 @@ from typing import Any, Optional
 import yaml
 
 from framework.manager import results, schedules, testcases
-from framework.manager.workspace import Workspace, WorkspaceError
+from framework.manager.workspace import ID_RE, Workspace, WorkspaceError
 
 STATUSES = ("pass", "fail", "error", "inconclusive", "not_run")
-_ID = re.compile(r"^[A-Za-z0-9_.-]{1,60}$")
+_ID = ID_RE                     # the shared id rule (workspace.ID_RE), also used for schedules
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MEMBER_TYPES = ("session", "suite", "case")
 
@@ -39,12 +39,12 @@ MEMBER_TYPES = ("session", "suite", "case")
 
 def _file(ws: Workspace, gid: str) -> Path:
     if not _ID.match(gid or ""):
-        raise WorkspaceError("a group id is letters, digits, '-', '_' or '.' (max 60 characters)")
+        raise WorkspaceError("a group id is letters, digits, '-', '_' or '.' (max 60 characters, not starting with '.')")
     return ws.dir("groups") / f"{gid}.json"
 
 
 def slug(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_.-]+", "-", name.strip()).strip("-")[:60] or "group"
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", name.strip()).strip("-").lstrip(".")[:60] or "group"
 
 
 def read_group(ws: Workspace, gid: str) -> dict[str, Any]:
@@ -491,7 +491,6 @@ def _donut_svg(counts: dict[str, int]) -> str:
             large = 1 if a2 - angle > math.pi else 0
             parts.append(f'<path d="M{x1:.1f},{y1:.1f} A{r},{r} 0 {large} 1 {x2:.1f},{y2:.1f} L{x3:.1f},{y3:.1f} A{r2},{r2} 0 {large} 0 {x4:.1f},{y4:.1f} Z" fill="{_COLORS[s]}"/>')
         angle = a2
-    done = total - counts.get("not_run", 0)
     parts.append(f'<text x="{cx}" y="{cy + 6}" text-anchor="middle" font-size="22" font-family="Segoe UI,Arial" fill="#24292f">{round(100 * counts.get("pass", 0) / total)}%</text>')
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="180" height="180" viewBox="0 0 180 180">{"".join(parts)}</svg>'
 
