@@ -208,5 +208,5 @@ async function historyDialog(s) {
   const { history } = await GET("/api/schedule/history?" + q({ id: s.id }));
   modal({ title: "History: " + (s.name || s.id), wide: true, body: history.length ? table(["Started", "Trigger", "Status", "Tests", "Log"], history.map((r) => h("tr", {}, h("td", { class: "small" }, fmtTime(r.started)), h("td", {}, r.trigger), h("td", {}, statusBadge(r.status)),
     h("td", { class: "small" }, (r.items || []).map((i) => h("div", {}, `${i.n}. ${i.path}: ${i.status}${i.seconds ? " (" + i.seconds + " s)" : ""}`))),
-    h("td", {}, r.dir ? h("a", { href: "/files/results/" + r.dir + "/run.log", target: "_blank" }, "log") : "")))) : h("div", { class: "empty" }, "Never run."), buttons: [{ label: "Close" }] });
+    h("td", {}, r.dir ? h("a", { href: "/files/results/" + r.dir.split("/").map(encodeURIComponent).join("/") + "/run.log", target: "_blank" }, "log") : "")))) : h("div", { class: "empty" }, "Never run."), buttons: [{ label: "Close" }] });
 }

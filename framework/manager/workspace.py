@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -33,6 +34,28 @@ KINDS = {"test_cases": "test_cases_dir", "results": "results_dir", "schedules": 
 
 class WorkspaceError(Exception):
     pass
+
+
+# One rule for every id that becomes a file or folder name (schedules, groups, run ids, revision ids): letters, digits,
+# '_', '-' and '.', not starting with '.', at most 60 characters -- so an id can never contain a path separator or '..'.
+ID_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,59}$")
+
+
+def check_id(value: Any, what: str = "id") -> str:
+    """`value` as a safe id, or WorkspaceError (a ValueError-free 400 in the API)."""
+    sid = str(value if value is not None else "").strip()
+    if not ID_RE.match(sid):
+        raise WorkspaceError(f"{what}: letters, digits, '-', '_' or '.' (max 60 characters, not starting with '.')")
+    return sid
+
+
+def resolve_within(base: Path, *parts: Any) -> Path:
+    """`base / parts...` resolved; refused (WorkspaceError) if the result is not strictly inside `base`."""
+    base = Path(base).resolve()
+    target = base.joinpath(*(str(p) for p in parts)).resolve()
+    if base not in target.parents:
+        raise WorkspaceError("path is outside the workspace folder")
+    return target
 
 
 def app_dir() -> Path:
