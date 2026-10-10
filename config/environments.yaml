@@ -1,6 +1,7 @@
 # One block per environment. `base_url` seeds the {base_url} variable for every case.
 # `connections` maps a connection name (referenced by a step's `connection` field,
-# default "default") to an ODBC connection string.
+# default "default") to an ODBC connection string. Never write a password here: use PWD={env:TESTBOT_DB_...}
+# (the value comes from that environment variable / .env entry; only names starting with TESTBOT_DB_ are allowed).
 
 demo:
   base_url: "https://the-internet.herokuapp.com"
@@ -22,8 +23,10 @@ ad_demo_portal:
   base_url: "http://127.0.0.1:8787/admin"
   connections: {}
 
-# Apriso 2023 test server. Fill in the database password (or remove the connection if the agent should not read the database).
+# Apriso 2023 test server. The password is NOT kept here: PWD={env:TESTBOT_DB_PASSWORD_WIN_APR23} is read from that environment
+# variable (or the .env file) when the connection is opened. Use a login that can only read (db_datareader) for queries the
+# agent or the "Try" dialog run; remove the connection if the agent should not read the database at all.
 win_apr23:
   base_url: "http://win-apr23/apriso/apriso"
   connections:
-    default: "Driver={ODBC Driver 18 for SQL Server};Server=win-apr23;Database=APRISO;UID=flxadmin;PWD=CHANGE_ME;Encrypt=no;TrustServerCertificate=yes;"
+    default: "Driver={ODBC Driver 18 for SQL Server};Server=win-apr23;Database=APRISO;UID=flxadmin;PWD={env:TESTBOT_DB_PASSWORD_WIN_APR23};Encrypt=no;TrustServerCertificate=yes;"

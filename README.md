@@ -97,6 +97,19 @@ qa:
 - `connections` maps a connection name (a step's `connection` field, default
   `"default"`) to an ODBC connection string, used by `sql_query`/`sql_exec` steps and
   SQL-sourced `variables`. Leave `{}` if a suite never touches SQL.
+- **Passwords:** do not write them in the file. Use `PWD={env:TESTBOT_DB_PASSWORD_QA}` and set that variable
+  (or a line in `.env`); only names starting with `TESTBOT_DB_` are allowed. The manager never sends connection-string
+  passwords to the browser (they are shown as `***`, and saving keeps the stored value).
+- **Use a read-only database login for the agent.** The agent's `query_db` / SQL checks and the manager's "Try" dialog
+  only accept a single `SELECT` and run it in a transaction that is always rolled back, but that filter is a second line
+  of defence. The real control is a login that can only read (for SQL Server: a user in `db_datareader` only, no
+  `db_owner`/`sysadmin`, no linked servers). Give the agent its own connection with such a login whenever the test
+  database matters. `sql_exec` steps need write rights; keep them on a separate connection name.
+- **Variables in SQL are bound parameters.** `{name}` in a `query` is sent to the database as a parameter, not pasted
+  into the text: `'{OrderNo}'`, `'ORD-{n}'` and `WHERE Id = {id}` all work as before, and a value such as `O'Brien`
+  can no longer break (or change) the statement. A plain number is still written inline (so `TOP {n}` works). To build
+  a table or column name at run time use `[{name}]` (only plain names are accepted) or, as an explicit opt-out,
+  `{raw:name}` -- never with values captured from the application.
 
 A session plan names its own environment directly (`environment: "demo"` in the plan
 file) instead of taking `--env` on the CLI -- see "Running a session" below.

@@ -811,7 +811,7 @@ Use these to prepare data, read values, or verify what the application saved.
 
 1. Provide a connection — `connections` in the suite (Excel: `Connections` sheet) or in `environments.yaml`:
    ```
-   "connections": {"default": "Driver={ODBC Driver 18 for SQL Server};Server=myserver;Database=MyDb;UID=me;PWD=secret;Encrypt=no;TrustServerCertificate=yes;"}
+   "connections": {"default": "Driver={ODBC Driver 18 for SQL Server};Server=myserver;Database=MyDb;UID=me;PWD={env:TESTBOT_DB_PASSWORD};Encrypt=no;TrustServerCertificate=yes;"}
    ```
    The name `default` is used when a step doesn't say otherwise; add more names and use them in a step's `connection`.
 2. Use the steps:
@@ -834,6 +834,18 @@ Example — check the application saved the record:
 query runs once, and may run before the application has committed its data.
 
 ⚠ `sql_exec` changes real data. Point tests at a test database, and know what each step changes.
+
+**Variables in SQL are sent as parameters.** `{OrderNo}` in a query is passed to the database as a bound parameter, not
+pasted into the SQL text, so a value with a quote (`O'Brien`) works and text captured from the application cannot change
+the statement. Write queries exactly as before: `'{OrderNo}'`, `N'%{name}%'` and `WHERE Id = {id}` all work. A plain
+number is written inline (so `TOP {n}` works). For a table or column name built at run time use `[{name}]` (plain names
+only) or `{raw:name}` (written into the SQL unchanged -- never use it with values captured from the application).
+
+**Passwords and logins.** Write `PWD={env:TESTBOT_DB_PASSWORD_QA}` instead of the password; the value is read from that
+environment variable (or `.env`) when the connection opens. Only names starting with `TESTBOT_DB_` are allowed. For the
+agent (`query_db`, SQL checks) and the manager's *Try* dialog, use a database login that can **only read**
+(`db_datareader`): those queries are limited to one `SELECT` and always rolled back, but the read-only login is the real
+protection.
 
 ---
 
@@ -1119,13 +1131,14 @@ uat:
     smtp_port: 587
     security: starttls                       # none | starttls | ssl
     username: testbot@company.com
-    password_env: TESTBOT_SMTP_PASSWORD_UAT  # the NAME of an environment variable -- never the password itself
+    password_env: TESTBOT_SMTP_PASSWORD_UAT  # the NAME of an environment variable (must start with TESTBOT_SMTP_) -- never the password itself
     from: testbot@company.com
     to: [uat-leads@company.com, qa@company.com]
     on: failure                              # never (default) | always | failure
     attach_report: false                     # attach the HTML report (default: no)
 ```
 
+- **A login needs encryption.** With a `username`, `security` must be `starttls` or `ssl`; testbot never sends the password over a plain connection. *Send test email* only uses the **saved** SMTP server: save the settings first.
 - **The password is never written to the file.** `password_env` names an environment variable (or a line of the `.env` file, section 11). A file that contains a `password:` key is refused when you save it in the manager.
 - **Nothing is sent unless `on` is `always` or `failure`.** `failure` sends only when at least one test case did not pass.
 - The session's **environment** (its `environment:` line, or `--env`) decides which block is used.

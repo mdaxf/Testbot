@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
 from playwright.sync_api import Error as PlaywrightError, Page
@@ -293,7 +293,7 @@ class ToolExecutor:
         except ValueError as exc:
             raise ToolError(f"{exc} (the agent may only read the database)") from exc
         try:
-            rows = run_query(self.sql.get(a.get("connection") or "default"), query)
+            rows = run_query(self.sql.get_readonly(a.get("connection") or "default"), query, rollback=True)
         except Exception as exc:  # noqa: BLE001
             raise ToolError(f"the query failed: {str(exc)[:200]}") from exc
         shown = [" | ".join(str(v) for v in r.values()) for r in rows[:15]]
@@ -374,7 +374,7 @@ class ToolExecutor:
         end, actual = time.monotonic() + 10, None
         while True:                               # the application may still be committing: retry for a few seconds
             try:
-                rows = run_query(self.sql.get(a.get("connection") or "default"), query)
+                rows = run_query(self.sql.get_readonly(a.get("connection") or "default"), query, rollback=True)
             except Exception as exc:  # noqa: BLE001
                 raise ToolError(f"the query failed: {str(exc)[:200]}") from exc
             col = a.get("column")
