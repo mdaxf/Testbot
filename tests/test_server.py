@@ -63,10 +63,10 @@ def test_schedule_and_chat_ids_are_validated(ws, api):
 
 
 def test_environments_are_masked_over_the_api(ws, api):
-    cs = "Driver=x;Server=s;UID=u;PWD=hunter2;"
+    cs = "Driver=x;Server=s;UID=u;PWD=fixture-pw;"
     dataaccess.write_environments(ws, {"qa": {"connections": {"default": cs}}})
     status, _, body = api("GET", "/api/environments")
-    assert status == 200 and b"hunter2" not in body
+    assert status == 200 and b"fixture-pw" not in body
     envs = json.loads(body)["environments"]
     assert api("PUT", "/api/environments", {"environments": envs})[0] == 200
     assert dataaccess.read_environments(ws)["qa"]["connections"]["default"] == cs
