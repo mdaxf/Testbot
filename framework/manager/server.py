@@ -7,6 +7,7 @@ Security (the API can write files and start test runs, so it is not left open):
   * every file path is resolved inside the workspace folders and refused if it escapes."""
 from __future__ import annotations
 
+import hashlib
 import json
 import mimetypes
 import re
@@ -18,7 +19,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from framework import revisions
 from framework.manager import ai, chat, dataaccess, groups, reviews, importer, results, schedules, scheduler, testcases
@@ -27,6 +28,12 @@ from framework.manager.workspace import KINDS, Workspace, WorkspaceError
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 MAX_BODY = 60 * 1024 * 1024
+# Result files (HTML reports especially) hold text from the application under test. They are served from this origin, so they
+# must never run script with access to the API: a sandboxed document without allow-scripts. allow-same-origin keeps relative
+# links/images to the run's own screenshots working; inline styles are allowed, nothing else is loaded from elsewhere.
+RESULT_FILE_CSP = ("sandbox allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-downloads; default-src 'none'; img-src 'self' data:; "
+                   "style-src 'self' 'unsafe-inline'; media-src 'self'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; "
+                   "frame-ancestors 'self'")
 from framework import logs
 from framework.brand_logo import LOGO_BG, LOGO_DATA_URI
 from framework.version import COPYRIGHT, PRODUCT, __version__ as VERSION  # noqa: E402
@@ -40,6 +47,20 @@ class ApiError(Exception):
         super().__init__(message)
         self.status = status
         self.extra = extra or {}
+
+
+def _int(value: Any, name: str) -> int:
+    """A whole number from the request (revision numbers), or a 400."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ApiError(400, f"'{name}' must be a whole number") from None
+
+
+def adhoc_id(prefix: str, path: str, keep: int) -> str:
+    """A run id for an ad-hoc run: readable (prefix + start of the name) and unique per full path (short hash), max 60 characters."""
+    digest = hashlib.sha1(path.encode("utf-8")).hexdigest()[:8]   # noqa: S324 - an id, not security
+    return f"{prefix}{re.sub(r'[^A-Za-z0-9_.-]', '_', path)[:keep]}-{digest}"
 
 
 # ------------------------------------------------------------------ the API (plain functions: (app, query, body) -> data)
@@ -102,7 +123,7 @@ class App:
         return self._rev(revisions.summary, q["path"])
 
     def revision_case(self, q, b):
-        return {"case": self._rev(revisions.case_content, q["path"], q["case"], q["rev"])}
+        return {"case": self._rev(revisions.case_content, q["path"], q["case"], _int(q["rev"], "rev"))}
 
     def revision_manifest(self, q, b):
         return {"suite": self._rev(revisions.manifest_suite, q["path"], q["id"])}
@@ -112,15 +133,15 @@ class App:
 
     def revision_diff(self, q, b):
         if q.get("case"):
-            a = self._rev(revisions.case_content, q["path"], q["case"], q["a"])
-            c = self._rev(revisions.case_content, q["path"], q["case"], q["b"])
+            a = self._rev(revisions.case_content, q["path"], q["case"], _int(q["a"], "a"))
+            c = self._rev(revisions.case_content, q["path"], q["case"], _int(q["b"], "b"))
             return {"changes": revisions.diff_cases(a, c)}
         return self._rev(revisions.diff_manifests, q["path"], q["a"], q["b"])
 
     def revision_default(self, q, b):
         kind = b.get("kind")
         if kind == "case":
-            return self._rev(revisions.make_default_case, b["path"], b["case"], int(b["rev"]), "activated")
+            return self._rev(revisions.make_default_case, b["path"], b["case"], _int(b["rev"], "rev"), "activated")
         if kind == "manifest":
             return self._rev(revisions.make_default_manifest, b["path"], b["id"], "activated")
         raise ApiError(400, "kind must be case or manifest")
@@ -129,7 +150,7 @@ class App:
         if b.get("kind") == "settings":
             self._rev(revisions.edit_settings_revision, b["path"], b["id"], b["content"], b.get("note", ""))
         else:
-            self._rev(revisions.edit_case_revision, b["path"], b["case"], int(b["rev"]), b["content"], b.get("note", ""))
+            self._rev(revisions.edit_case_revision, b["path"], b["case"], _int(b["rev"], "rev"), b["content"], b.get("note", ""))
         return {"saved": True}
 
     def revision_draft(self, q, b):
@@ -139,7 +160,7 @@ class App:
         if q.get("kind") == "manifest":
             self._rev(revisions.delete_manifest, q["path"], q["id"])
         else:
-            self._rev(revisions.delete_case_revision, q["path"], q["case"], int(q["rev"]))
+            self._rev(revisions.delete_case_revision, q["path"], q["case"], _int(q["rev"], "rev"))
         return {"deleted": True}
 
     def recommendation(self, q, b):
@@ -188,21 +209,32 @@ class App:
 
     # -- variables / SQL / environments
     def environments(self, q, b):
-        return {"environments": dataaccess.read_environments(self.ws)}
+        return {"environments": dataaccess.masked_environments(dataaccess.read_environments(self.ws))}   # passwords never go to the browser
 
     def put_environments(self, q, b):
         dataaccess.write_environments(self.ws, b["environments"])
         return {"saved": True}
 
     def email_test(self, q, b):
-        """Send ONE test message to the address the user typed, using the environment's email settings (the unsaved ones from the page, if sent)."""
+        """Send ONE test message to the address the user typed, using the environment's email settings (the unsaved ones from the page, if sent).
+        The SMTP server must be the SAVED one: a request can never point the login (and the password variable) at another host."""
         from framework import emailer
 
         env = b.get("environment") or ""
+        saved_env = (dataaccess.read_environments(self.ws).get(env, {}) or {}).get("email")
         if b.get("scope") == "settings":                    # the defaults typed on the Settings page, as they are
             block = b.get("email")
+            saved = self.ws.data.get("email") or {}
         else:                                              # an environment's block (unsaved one from the page, if sent) over the Settings defaults
-            block = emailer.merge(b.get("email") or (dataaccess.read_environments(self.ws).get(env, {}) or {}).get("email"), self.ws.data.get("email"))
+            block = emailer.merge(b.get("email") or saved_env, self.ws.data.get("email"))
+            saved = emailer.merge(saved_env, self.ws.data.get("email")) or {}
+        block = dict(block or {})
+        saved_host = str(saved.get("smtp_host") or "").strip()
+        if not saved_host:
+            raise ApiError(400, "save the SMTP server first, then send the test message")
+        if str(block.get("smtp_host") or "").strip().lower() != saved_host.lower():
+            raise ApiError(400, f"the SMTP server on the page ({block.get('smtp_host') or 'none'}) is not the saved one ({saved_host}): save the settings first")
+        block["smtp_host"] = saved_host
         to = emailer._addresses(b.get("to"))
         if not to:
             raise ApiError(400, "type the address to send the test message to")
@@ -215,9 +247,11 @@ class App:
 
     def sql_test(self, q, b):
         cs = b.get("connection_string", "")
+        envs = dataaccess.read_environments(self.ws)
         if not cs and b.get("env"):
-            cs = (dataaccess.read_environments(self.ws).get(b["env"], {}).get("connections", {}) or {}).get(b.get("connection", "default"), "")
+            cs = (envs.get(b["env"], {}).get("connections", {}) or {}).get(b.get("connection", "default"), "")
         try:
+            cs = dataaccess.find_stored_connection(envs, cs, b.get("env") or "", b.get("connection") or "default")   # the page only has *** for the password
             return dataaccess.run_select(cs, b.get("query", ""))
         except ValueError as exc:
             raise ApiError(400, str(exc))
@@ -289,7 +323,7 @@ class App:
                 groups.run_plan(self.ws, b["path"], mode)      # fails early (closed / empty / nothing left) with a clear message
             except (ValueError, WorkspaceError) as exc:
                 raise ApiError(400, str(exc))
-            sched = {"id": f"adhoc-group-{mode}-" + re.sub(r"[^A-Za-z0-9_.-]", "_", b["path"])[:40], "name": f"Group {b['path']}: {mode}", "results_subdir": "manual/group-" + b["path"],
+            sched = {"id": adhoc_id(f"adhoc-group-{mode}-", b["path"], 60 - len(f"adhoc-group-{mode}-") - 9), "name": f"Group {b['path']}: {mode}", "results_subdir": "manual/group-" + b["path"],
                      "items": [{"type": "group", "path": b["path"], "mode": mode, "options": b.get("options") or {}}]}
             return self._start_run(sched, "manual")
         item = {"type": b.get("type", "suite"), "path": b["path"], "env": b.get("env") or "", "options": b.get("options") or {}}
@@ -301,7 +335,7 @@ class App:
             if not isinstance(b["tags"], list):
                 raise ApiError(400, "'tags' must be a list of tags")
             item["tags"] = [str(t) for t in b["tags"]]
-        sid = "adhoc-" + re.sub(r"[^A-Za-z0-9_.-]", "_", Path(b["path"]).stem)[:40]
+        sid = adhoc_id("adhoc-", b["path"], 40)                 # the hash of the full path keeps a/login.json and b/login.json apart
         sched = {"id": sid, "name": f"Run {b['path']}", "items": [item], "results_subdir": "manual/" + sid}
         return self._start_run(sched, "manual")
 
@@ -601,10 +635,10 @@ def make_handler(app: App, token: str, allowed_hosts: set[str]):
                 return self._serve_static(url.path[len("/static/"):])
             if method == "GET" and url.path.startswith("/files/results/"):
                 try:
-                    path, ctype = results.file_for_serving(app.ws, url.path[len("/files/results/"):].replace("%20", " "))
+                    path, ctype = results.file_for_serving(app.ws, unquote(url.path[len("/files/results/"):]))
                 except WorkspaceError:
                     return self._send(404, b"not found", "text/plain")
-                return self._send(200, path.read_bytes(), ctype)
+                return self._send(200, path.read_bytes(), ctype, {"Content-Security-Policy": RESULT_FILE_CSP})
             fn = table.get((method, url.path))
             if fn is None:
                 return self._json(404, {"error": f"no such endpoint {method} {url.path}"})

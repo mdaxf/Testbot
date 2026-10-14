@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape as _html_escape
 from pathlib import Path
 from typing import Iterable
 from xml.etree.ElementTree import Element, ElementTree, SubElement
@@ -88,23 +89,30 @@ def _format_steps(steps: Iterable[StepResult]) -> str:
     return "\n".join(lines)
 
 
+def _e(value) -> str:
+    """HTML-escape any interpolated value. Report text comes from the application
+    under test (element text, REST/bus payloads, error messages), so it must never be
+    trusted as markup."""
+    return "" if value is None else _html_escape(str(value), quote=True)
+
+
 def _footer() -> str:
-    return f'<hr><p style="color:#666;font-size:12px">{PRODUCT} {__version__} &middot; {COPYRIGHT}</p>'
+    return f'<hr><p style="color:#666;font-size:12px">{_e(PRODUCT)} {_e(__version__)} &middot; {_e(COPYRIGHT)}</p>'
 
 
 def _step_row(step: StepResult) -> str:
     color = _STEP_COLORS.get(step.status, "#000000")
-    evidence = f'<a href="{step.screenshot_path}">screenshot</a>' if step.screenshot_path else ""
+    evidence = f'<a href="{_e(step.screenshot_path)}">screenshot</a>' if step.screenshot_path else ""
     return (
         "<tr>"
-        f"<td>{step.step_no}</td>"
-        f"<td>{step.description}</td>"
-        f"<td>{step.action}</td>"
-        f"<td>{step.data_used or ''}</td>"
-        f'<td style="color:{color}">{step.status.upper()}</td>'
-        f"<td>{step.expected if step.expected is not None else ''}</td>"
-        f"<td>{step.actual if step.actual is not None else ''}</td>"
-        f"<td>{step.error or ''}</td>"
+        f"<td>{_e(step.step_no)}</td>"
+        f"<td>{_e(step.description)}</td>"
+        f"<td>{_e(step.action)}</td>"
+        f"<td>{_e(step.data_used or '')}</td>"
+        f'<td style="color:{color}">{_e(step.status.upper())}</td>'
+        f"<td>{_e(step.expected)}</td>"
+        f"<td>{_e(step.actual)}</td>"
+        f"<td>{_e(step.error or '')}</td>"
         f"<td>{evidence}</td>"
         "</tr>"
     )
@@ -114,7 +122,7 @@ def _case_block(case: CaseResult) -> str:
     color = _CASE_COLORS.get(case.status, "#000000")
     rows = "".join(_step_row(step) for step in case.steps)
     return (
-        f'<h3 style="color:{color}">{case.case_id} — {case.title} [{case.status.upper()}]</h3>'
+        f'<h3 style="color:{color}">{_e(case.case_id)} — {_e(case.title)} [{_e(case.status.upper())}]</h3>'
         "<table border='1' cellpadding='4' cellspacing='0'>"
         "<tr><th>Step</th><th>Description</th><th>Action</th><th>Data Used</th><th>Status</th>"
         "<th>Expected</th><th>Actual</th><th>Error</th><th>Evidence</th></tr>"
@@ -152,8 +160,8 @@ def _final_status(cases: list) -> tuple[str, str]:
 
 def _case_summary_table(cases: list) -> str:
     rows = "".join(
-        f"<tr><td>{c.case_id}</td><td>{c.title}</td><td style=\"color:{_CASE_COLORS.get(c.status, '#000000')}\">{c.status.upper()}</td>"
-        f"<td>{_utc(c.finished_at) if c.finished_at else ''}</td><td>{c.duration_ms / 1000:.1f} s</td><td>{len(c.steps)}</td></tr>"
+        f"<tr><td>{_e(c.case_id)}</td><td>{_e(c.title)}</td><td style=\"color:{_CASE_COLORS.get(c.status, '#000000')}\">{_e(c.status.upper())}</td>"
+        f"<td>{_e(_utc(c.finished_at)) if c.finished_at else ''}</td><td>{c.duration_ms / 1000:.1f} s</td><td>{len(c.steps)}</td></tr>"
         for c in cases)
     return ("<table border='1' cellpadding='4' cellspacing='0'><tr><th>Test case</th><th>Title</th><th>Final result</th><th>Finished</th><th>Duration</th><th>Steps</th></tr>"
             f"{rows}</table>")
@@ -164,25 +172,25 @@ def _final_block(title: str, cases: list, started, finished) -> str:
     counts = ", ".join(f"{n} {name}" for name, n in (
         ("passed", sum(1 for c in cases if c.status == "pass")), ("failed", sum(1 for c in cases if c.status == "fail")),
         ("error", sum(1 for c in cases if c.status == "error")), ("inconclusive", sum(1 for c in cases if c.status == "inconclusive"))) if n)
-    return (f"<h2 style=\"color:{color}\">{title}: {label}</h2>"
-            f"<p>Final test: <b>{_utc(finished or started)}</b> (started {_utc(started)}, duration {_seconds(started, finished)}) &mdash; {len(cases)} test case(s): {counts or 'none'}</p>"
+    return (f"<h2 style=\"color:{color}\">{_e(title)}: {_e(label)}</h2>"
+            f"<p>Final test: <b>{_e(_utc(finished or started))}</b> (started {_e(_utc(started))}, duration {_e(_seconds(started, finished))}) &mdash; {len(cases)} test case(s): {_e(counts or 'none')}</p>"
             f"{_case_summary_table(cases) if cases else ''}")
 
 
 def _selection_note(result: SuiteResult) -> str:
     if not result.selected:
         return ""
-    return f"<p>Selected {len(result.selected)} of {result.cases_in_file} case(s), in this order: {', '.join(result.selected)}</p>"
+    return f"<p>Selected {len(result.selected)} of {_e(result.cases_in_file)} case(s), in this order: {_e(', '.join(result.selected))}</p>"
 
 
 def write_html_report(result: SuiteResult, path: str | Path) -> None:
     body = "".join(_case_block(case) for case in result.cases)
     html = (
-        f"<html><head><title>Test Report - {result.suite_id}</title></head><body>"
-        f"<h1>{result.suite_id} ({result.environment})</h1>"
-        f"<p>Started: {result.started_at} — Finished: {result.finished_at}</p>"
+        f"<html><head><meta charset=\"utf-8\"><title>Test Report - {_e(result.suite_id)}</title></head><body>"
+        f"<h1>{_e(result.suite_id)} ({_e(result.environment)})</h1>"
+        f"<p>Started: {_e(result.started_at)} — Finished: {_e(result.finished_at)}</p>"
         f"{_final_block('Final result', result.cases, result.started_at, result.finished_at)}"
-        f"<p>Passed: {result.passed} / {len(result.cases)}</p>"
+        f"<p>Passed: {_e(result.passed)} / {len(result.cases)}</p>"
         f"{_selection_note(result)}"
         f"<h2>Steps</h2>{body}{_footer()}</body></html>"
     )
@@ -194,25 +202,25 @@ def write_session_html_report(result: SessionResult, path: str | Path) -> None:
     for suite in result.suites:
         body = "".join(_case_block(case) for case in suite.cases)
         sections.append(
-            f"<h2>{suite.suite_id} ({suite.environment})</h2>"
+            f"<h2>{_e(suite.suite_id)} ({_e(suite.environment)})</h2>"
             f"{_final_block('Result of this file', suite.cases, suite.started_at, suite.finished_at)}"
-            f"<p>Passed: {suite.passed} / {len(suite.cases)}</p>"
+            f"<p>Passed: {_e(suite.passed)} / {len(suite.cases)}</p>"
             f"{_selection_note(suite)}"
             f"{body}"
         )
 
     stopped_notice = (
-        f"<p style='color:#cf222e'>Session stopped early after a failure in: {result.stopped_after_file}</p>"
+        f"<p style='color:#cf222e'>Session stopped early after a failure in: {_e(result.stopped_after_file)}</p>"
         if result.stopped_early
         else ""
     )
 
     html = (
-        f"<html><head><title>Session Report - {result.session_id}</title></head><body>"
-        f"<h1>{result.session_id} — {result.session_name}</h1>"
-        f"<p>Started: {result.started_at} — Finished: {result.finished_at}</p>"
+        f"<html><head><meta charset=\"utf-8\"><title>Session Report - {_e(result.session_id)}</title></head><body>"
+        f"<h1>{_e(result.session_id)} — {_e(result.session_name)}</h1>"
+        f"<p>Started: {_e(result.started_at)} — Finished: {_e(result.finished_at)}</p>"
         f"{_final_block('Final result of the session', [c for s in result.suites for c in s.cases], result.started_at, result.finished_at)}"
-        f"<p>Passed: {result.passed_cases} / {result.total_cases} cases across {len(result.suites)} file(s)</p>"
+        f"<p>Passed: {_e(result.passed_cases)} / {_e(result.total_cases)} cases across {len(result.suites)} file(s)</p>"
         f"{stopped_notice}"
         f"{''.join(sections)}{_footer()}</body></html>"
     )

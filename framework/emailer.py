@@ -38,6 +38,8 @@ from framework import logs
 
 log = logs.get("email")
 SECURITY = ("none", "starttls", "ssl")
+PASSWORD_ENV_PREFIX = "TESTBOT_SMTP_"          # password_env may only name these variables (never e.g. an AI key)
+_PASSWORD_ENV = re.compile(r"^TESTBOT_SMTP_[A-Za-z0-9_]+$")
 RULES = ("never", "always", "failure")
 _ADDR = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
 
@@ -127,8 +129,11 @@ def check_block(block: Any, require_host: bool = True) -> list[str]:
         out.append(f"email: on must be one of {', '.join(RULES)}")
     if block.get("username") and not block.get("password_env"):
         out.append("email: a username needs password_env (the name of the environment variable that holds the password)")
-    if block.get("password_env") and not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", str(block["password_env"])):
-        out.append("email: password_env must be the NAME of an environment variable (letters, digits, underscore)")
+    if block.get("password_env") and not _PASSWORD_ENV.match(str(block["password_env"])):
+        out.append(f"email: password_env must be the NAME of an environment variable starting with {PASSWORD_ENV_PREFIX} (letters, digits, underscore), "
+                   f"for example {PASSWORD_ENV_PREFIX}PASSWORD")
+    if block.get("username") and (block.get("security") or "starttls") == "none":
+        out.append("email: a username (SMTP login) needs security starttls or ssl -- the password is never sent over an unencrypted connection")
     for key in ("from",):
         if block.get(key) and not _ADDR.match(str(block[key]).strip()):
             out.append(f"email: '{block[key]}' is not an email address")
@@ -166,6 +171,10 @@ def send(s: EmailSettings, msg: EmailMessage, env: Optional[dict[str, str]] = No
     env = os.environ if env is None else env
     password = None
     if s.username:
+        if not _PASSWORD_ENV.match(s.password_env or ""):
+            raise EmailError(f"password_env must name a variable starting with {PASSWORD_ENV_PREFIX}")
+        if s.security not in ("starttls", "ssl"):
+            raise EmailError("an SMTP login needs security starttls or ssl (the password is never sent unencrypted)")
         password = env.get(s.password_env)
         if not password:
             raise EmailError(f"the environment variable {s.password_env} is not set (it must hold the SMTP password)")

@@ -19,7 +19,7 @@ from typing import Any, Optional
 
 from framework import revisions, suitefix
 from framework.manager import ai, testcases
-from framework.manager.workspace import Workspace, WorkspaceError
+from framework.manager.workspace import Workspace, WorkspaceError, resolve_within
 
 HISTORY_LIMIT = 200          # messages kept on disk
 CONTEXT_MESSAGES = 10        # messages sent along with a new one
@@ -47,7 +47,10 @@ def _now() -> str:
 
 
 def _file(ws: Workspace, rel: str) -> Path:
-    return ws.dir("test_cases") / revisions.DIR_NAME / rel / "chat.json"
+    """<test_cases>/.revisions/<rel>/chat.json -- refused if `rel` escapes the suite's own folder."""
+    ws.safe_path("test_cases", rel)                                   # the suite path itself must be inside the test-cases folder
+    folder = resolve_within(ws.dir("test_cases") / revisions.DIR_NAME, rel)
+    return folder / "chat.json"
 
 
 def load(ws: Workspace, rel: str) -> dict[str, Any]:

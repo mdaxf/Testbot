@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from urllib.parse import urlsplit
 
-from playwright.sync_api import ElementHandle, Frame, Page
+from playwright.sync_api import Frame, Page
 
 from framework.agent.config import Profile
 

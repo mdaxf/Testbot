@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import threading
 import time
@@ -20,13 +21,14 @@ import yaml
 
 from framework import emailer, logs
 from framework import tlsconfig
-from framework.manager.workspace import Workspace, WorkspaceError
+from framework.manager.workspace import Workspace, WorkspaceError, check_id
 
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 TRIGGER_TYPES = ["once", "interval", "daily", "weekly", "monthly", "manual"]
 HISTORY_LIMIT = 60
 MISSED_GRACE = timedelta(minutes=10)   # a run missed by more than this (scheduler was off) is skipped, not replayed
-_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,60}$")
+slog = logs.get("scheduler")
+CANCEL_GRACE_S = 10                    # after "cancel", how long a test run may take to stop before it is killed
 
 
 # ------------------------------------------------------------------ storage
@@ -35,6 +37,31 @@ def _state_dir(ws: Workspace) -> Path:
     d = ws.dir("schedules") / ".state"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def _schedule_file(ws: Workspace, sid: str) -> Path:
+    return ws.dir("schedules") / f"{check_id(sid, 'schedule id')}.json"
+
+
+def _state_file(ws: Workspace, sid: str) -> Path:
+    return _state_dir(ws) / f"{check_id(sid, 'schedule id')}.json"
+
+
+def _write_json_atomic(path: Path, data: Any) -> None:
+    """Write to a temporary file next to `path`, then os.replace it: a reader never sees half a file (same pattern as
+    revisions._write). The temporary name is unique per process/thread, so two writers never share it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    for attempt in range(10):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:                     # Windows: the target is open in another process for a moment
+            if attempt == 9:
+                tmp.unlink(missing_ok=True)
+                raise
+            time.sleep(0.05)
 
 
 def list_schedules(ws: Workspace) -> list[dict[str, Any]]:
@@ -52,7 +79,7 @@ def list_schedules(ws: Workspace) -> list[dict[str, Any]]:
 
 
 def load_schedule(ws: Workspace, sid: str) -> dict[str, Any]:
-    path = ws.dir("schedules") / f"{sid}.json"
+    path = _schedule_file(ws, sid)
     if not path.is_file():
         raise WorkspaceError(f"schedule '{sid}' does not exist")
     sched = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -61,23 +88,19 @@ def load_schedule(ws: Workspace, sid: str) -> dict[str, Any]:
 
 
 def save_schedule(ws: Workspace, sched: dict[str, Any]) -> dict[str, Any]:
-    sid = str(sched.get("id", "")).strip()
-    if not _ID.match(sid):
-        raise ValueError("schedule id: letters, digits, '-', '_' or '.' (max 60 chars)")
+    sid = check_id(sched.get("id", ""), "schedule id")
     problems = check_schedule(ws, sched)
     if any(p["level"] == "error" for p in problems):
         raise ValueError("; ".join(p["message"] for p in problems if p["level"] == "error"))
-    d = ws.dir("schedules")
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"{sid}.json").write_text(json.dumps(sched, indent=2), encoding="utf-8")
+    _write_json_atomic(_schedule_file(ws, sid), sched)
     return sched
 
 
 def delete_schedule(ws: Workspace, sid: str) -> None:
-    path = ws.dir("schedules") / f"{sid}.json"
+    path = _schedule_file(ws, sid)
     if path.is_file():
         path.unlink()
-    (_state_dir(ws) / f"{sid}.json").unlink(missing_ok=True)
+    _state_file(ws, sid).unlink(missing_ok=True)
 
 
 def check_schedule(ws: Workspace, sched: dict[str, Any]) -> list[dict[str, str]]:
@@ -166,18 +189,18 @@ def next_fire(trigger: dict[str, Any], after: datetime, *, anchor: Optional[date
 
 
 def read_state(ws: Workspace, sid: str) -> dict[str, Any]:
-    p = _state_dir(ws) / f"{sid}.json"
+    p = _state_file(ws, sid)
     if p.exists():
         try:
             return json.loads(p.read_text(encoding="utf-8"))
-        except ValueError:
-            pass
+        except ValueError as exc:
+            slog.warning("schedule %s: the state file %s is not valid JSON (%s); starting with an empty history", sid, p, exc)
     return {"history": []}
 
 
 def write_state(ws: Workspace, sid: str, state: dict[str, Any]) -> None:
     state["history"] = state.get("history", [])[-HISTORY_LIMIT:]
-    (_state_dir(ws) / f"{sid}.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
+    _write_json_atomic(_state_file(ws, sid), state)
 
 
 def schedule_status(ws: Workspace, sched: dict[str, Any], now: Optional[datetime] = None) -> dict[str, Any]:
@@ -212,6 +235,66 @@ def pid_alive(pid: Optional[int]) -> bool:
         return True
     except OSError:
         return False
+
+
+def _popen_kwargs() -> dict[str, Any]:
+    """Start the runner in its own process group, so cancel can stop it together with the browser it started."""
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    return {"start_new_session": True}
+
+
+def _kill_tree(proc: subprocess.Popen, grace_s: float = CANCEL_GRACE_S) -> None:
+    """Stop `proc` and everything it started: politely first, then by force after `grace_s`."""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
+        try:
+            proc.wait(timeout=grace_s)
+            return
+        except subprocess.TimeoutExpired:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError):
+            proc.terminate()
+        try:
+            proc.wait(timeout=grace_s)
+            return
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                proc.kill()
+    try:
+        proc.wait(timeout=grace_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
+def run_child(cmd: list[str], *, cancel: threading.Event, timeout_s: Optional[float] = None, poll_s: float = 1.0,
+              grace_s: float = CANCEL_GRACE_S, **popen_kwargs: Any) -> tuple[int, str]:
+    """Run `cmd` until it exits, `cancel` is set, or `timeout_s` passes. Returns (exit code, "" | "cancelled" | "timeout").
+    A cancelled or timed-out child is stopped together with its children (see _kill_tree)."""
+    proc = subprocess.Popen(cmd, **_popen_kwargs(), **popen_kwargs)
+    deadline = time.monotonic() + timeout_s if timeout_s else None
+    try:
+        while True:
+            try:
+                return proc.wait(timeout=poll_s), ""
+            except subprocess.TimeoutExpired:
+                pass
+            if cancel.is_set():
+                _kill_tree(proc, grace_s)
+                return -15, "cancelled"
+            if deadline is not None and time.monotonic() > deadline:
+                _kill_tree(proc, grace_s)
+                return -9, "timeout"
+    finally:
+        if proc.poll() is None:          # an unexpected error above: never leave the child running
+            _kill_tree(proc, grace_s)
 
 
 _running: dict[str, threading.Event] = {}
@@ -254,9 +337,6 @@ def item_command(ws: Workspace, item: dict[str, Any], report_dir: Path) -> list[
     return cmd
 
 
-slog = logs.get("scheduler")
-
-
 def agent_env(agent: dict[str, Any]) -> dict[str, str]:
     """The workspace's agent defaults as TESTBOT_* environment variables for the runner (only what is set)."""
     mapping = {"mode": "TESTBOT_MODE", "provider": "TESTBOT_AGENT_PROVIDER", "model": "TESTBOT_AGENT_MODEL", "vision": "TESTBOT_AGENT_VISION",
@@ -280,22 +360,25 @@ def run_schedule(ws: Workspace, sched: dict[str, Any], trigger: str = "manual",
         if sid in _running:
             return {"status": "skipped", "message": "already running", "schedule": sid}
         _running[sid] = cancel or threading.Event()
-    started = datetime.now()
-    slog.info("schedule %s started (%s), %d item(s)", sid, trigger, len(sched.get("items", [])))
-    run_id = started.strftime("%Y%m%d-%H%M%S")
-    run_dir = ws.dir("results") / (sched.get("results_subdir") or sid) / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-    record: dict[str, Any] = {"run_id": run_id, "schedule": sid, "trigger": trigger, "started": started.isoformat(timespec="seconds"),
-                              "dir": ws.rel("results", run_dir), "items": [], "status": "running"}
-    state = read_state(ws, sid)
-    state["running"] = True
-    state["running_pid"] = os.getpid()
-    write_state(ws, sid, state)
-    if progress:
-        progress(record)
-    log = (run_dir / "run.log").open("w", encoding="utf-8")
+    record: dict[str, Any] = {"schedule": sid, "trigger": trigger, "items": [], "status": "running"}
     overall = "pass"
-    try:
+    log = None
+    state_written = False
+    try:                                  # everything after the registration is inside try/finally, so it is always removed
+        started = datetime.now()
+        slog.info("schedule %s started (%s), %d item(s)", sid, trigger, len(sched.get("items", [])))
+        run_id = started.strftime("%Y%m%d-%H%M%S")
+        run_dir = ws.dir("results") / (sched.get("results_subdir") or sid) / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        record.update(run_id=run_id, started=started.isoformat(timespec="seconds"), dir=ws.rel("results", run_dir))
+        state = read_state(ws, sid)
+        state["running"] = True
+        state["running_pid"] = os.getpid()
+        write_state(ws, sid, state)
+        state_written = True
+        if progress:
+            progress(record)
+        log = (run_dir / "run.log").open("w", encoding="utf-8")
         stop = False
         for n, item in enumerate(sched.get("items", []), start=1):
             entry: dict[str, Any] = {"n": n, "type": item.get("type"), "path": item.get("path")}
@@ -312,12 +395,12 @@ def run_schedule(ws: Workspace, sched: dict[str, Any], trigger: str = "manual",
                 child_env = {**os.environ, **tlsconfig.env_for_child(tlsconfig.TlsSettings.from_dict(ws.data.get("ai", {}))), **agent_env(ws.data.get("agent", {})),
                              **logs.env_for_child((ws.data.get("logging") or {}).get("level")),
                              **emailer.env_for_child(ws.data.get("email"))}
-                proc = subprocess.run(cmd, cwd=str(ws.root), stdout=log, stderr=subprocess.STDOUT, env=child_env,
-                                      timeout=item.get("timeout_s") or None)
-                code = proc.returncode
-            except subprocess.TimeoutExpired:
-                code = -9
-                log.write("\n(timed out)\n")
+                code, why = run_child(cmd, cancel=_running[sid], timeout_s=item.get("timeout_s") or None,
+                                      cwd=str(ws.root), stdout=log, stderr=subprocess.STDOUT, env=child_env)
+                if why == "timeout":
+                    log.write("\n(timed out)\n")
+                elif why == "cancelled":
+                    log.write("\n(cancelled)\n")
             except Exception as exc:  # noqa: BLE001 - reported in the record, never crashes the scheduler
                 code = -1
                 log.write(f"\n(could not start: {exc})\n")
@@ -331,16 +414,26 @@ def run_schedule(ws: Workspace, sched: dict[str, Any], trigger: str = "manual",
                     stop = True
             if progress:
                 progress(record)
+    except Exception as exc:  # noqa: BLE001 - set-up failed (disk full, permissions, bad results_subdir): a failed record, never a stuck schedule
+        overall = "error"
+        record["message"] = f"{type(exc).__name__}: {exc}"
+        slog.error("schedule %s could not run: %s", sid, record["message"])
     finally:
-        log.close()
-        finished = datetime.now()
-        record.update(status=overall if not _running[sid].is_set() else "cancelled", finished=finished.isoformat(timespec="seconds"))
-        state = read_state(ws, sid)
-        state.update(running=False, anchor=finished.isoformat(timespec="seconds"))
-        state.setdefault("history", []).append(record)
-        write_state(ws, sid, state)
-        with _running_lock:
-            _running.pop(sid, None)
+        try:
+            if log is not None:
+                log.close()
+            finished = datetime.now()
+            record.update(status=overall if not _running[sid].is_set() else "cancelled", finished=finished.isoformat(timespec="seconds"))
+            if state_written or "run_id" in record:
+                state = read_state(ws, sid)
+                state.update(running=False, anchor=finished.isoformat(timespec="seconds"))
+                state.setdefault("history", []).append(record)
+                write_state(ws, sid, state)
+        except Exception as exc:  # noqa: BLE001
+            slog.error("schedule %s: could not record the run: %s", sid, exc)
+        finally:
+            with _running_lock:
+                _running.pop(sid, None)
     return record
 
 

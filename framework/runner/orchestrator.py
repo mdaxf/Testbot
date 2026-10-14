@@ -250,7 +250,7 @@ class Orchestrator:
                 ctx.set(name, generate_faker_value(source.model_dump(exclude_none=True)))
             elif source.source == "sql":
                 conn = self.sql_connections.get(source.connection)
-                rows = run_query(conn, ctx.resolve_string(source.query or ""))
+                rows = run_query(conn, *ctx.resolve_sql(source.query or ""))      # values are bound parameters, never pasted into the SQL
                 if not rows:
                     raise ValueError(f"Variable '{name}': SQL query returned no rows")
                 column = source.column or next(iter(rows[0]))
@@ -275,8 +275,8 @@ class Orchestrator:
 
             if step.action == "sql_query":
                 conn = self.sql_connections.get(step.connection)
-                query = ctx.resolve_string(step.query or "")
-                rows = run_query(conn, query)
+                query, params = ctx.resolve_sql(step.query or "")       # values are bound parameters, never pasted into the SQL
+                rows = run_query(conn, query, params)
                 sql_row = rows[0] if rows else None
                 if step.config and step.config.get("poll") and step.expected is not None:
                     # config.poll: the app may still be committing -- re-run until the expectation holds
@@ -284,11 +284,11 @@ class Orchestrator:
                     deadline = time.monotonic() + step.timeout_ms / 1000
                     while time.monotonic() < deadline and not evaluate_expected(page, step.expected, ctx, sql_row=sql_row).passed:
                         time.sleep(1)
-                        rows = run_query(conn, query)
+                        rows = run_query(conn, query, params)
                         sql_row = rows[0] if rows else None
             elif step.action == "sql_exec":
                 conn = self.sql_connections.get(step.connection)
-                run_exec(conn, ctx.resolve_string(step.query or ""))
+                run_exec(conn, *ctx.resolve_sql(step.query or ""))
             elif step.action == "set_var":
                 if step.capture is None:
                     raise ValueError("set_var step requires a 'capture' block naming the variable")
