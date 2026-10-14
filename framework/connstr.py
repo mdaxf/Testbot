@@ -14,7 +14,8 @@ from typing import Mapping, Optional
 ENV_PREFIX = "TESTBOT_DB_"
 MASK = "***"
 _ENV_REF = re.compile(r"\{env:([A-Za-z_][A-Za-z0-9_]*)\}")
-_PWD = re.compile(r"(?i)(?<![A-Za-z0-9_])(pwd|password)=(\{(?:[^}]|\}\})*\}|[^;]*)")
+# ODBC allows spaces around '='. The value is either an {env:...} / braced token, or everything up to the next ';'.
+_PWD = re.compile(r"(?i)(?<![A-Za-z0-9_])(pwd|password)\s*=\s*(\{(?:[^}]|\}\})*\}|[^;]*)")
 
 
 def expand(cs: str, env: Optional[Mapping[str, str]] = None) -> str:
@@ -42,13 +43,14 @@ def _is_masked_value(value: str) -> bool:
 def mask(cs: str) -> str:
     """The connection string with its password replaced by ***. An {env:NAME} reference is not a secret and is kept."""
     def sub(m: re.Match[str]) -> str:
-        return m.group(0) if _ENV_REF.fullmatch(m.group(2)) or not m.group(2) else f"{m.group(1)}={MASK}"
+        value = m.group(2).strip()
+        return m.group(0) if _ENV_REF.fullmatch(value) or not value else f"{m.group(1)}={MASK}"
 
     return _PWD.sub(sub, cs or "")
 
 
 def is_masked(cs: str) -> bool:
-    return any(_is_masked_value(m.group(2)) for m in _PWD.finditer(cs or ""))
+    return any(_is_masked_value(m.group(2).strip()) for m in _PWD.finditer(cs or ""))
 
 
 def unmask(new: str, old: Optional[str]) -> str:
@@ -57,7 +59,7 @@ def unmask(new: str, old: Optional[str]) -> str:
         return new
     if old and mask(old) == new:
         return old
-    stored = next((m.group(2) for m in _PWD.finditer(old or "") if not _is_masked_value(m.group(2))), None)
+    stored = next((m.group(2).strip() for m in _PWD.finditer(old or "") if not _is_masked_value(m.group(2).strip())), None)
     if stored is None:
         raise ValueError("the connection string has a hidden password (***) but no stored password to keep: type the password again")
-    return _PWD.sub(lambda m: f"{m.group(1)}={stored}" if _is_masked_value(m.group(2)) else m.group(0), new)
+    return _PWD.sub(lambda m: f"{m.group(1)}={stored}" if _is_masked_value(m.group(2).strip()) else m.group(0), new)

@@ -72,8 +72,19 @@ def _worker_main(runner: Callable[..., dict], args_dict: dict[str, Any], load: L
         out.put({"type": "done", "worker": worker_id})
 
 
+def _stop_worker(proc: multiprocessing.Process, join_s: float) -> None:
+    proc.join(timeout=join_s)
+    if not proc.is_alive():
+        return
+    proc.terminate()
+    proc.join(timeout=5)
+    if proc.is_alive():
+        proc.kill()
+        proc.join(timeout=5)
+
+
 def run_load(runner: Callable[..., dict], args_dict: dict[str, Any], load: LoadSettings, report_dir: Path,
-             log: Callable[[str], None] = print) -> dict[str, Any]:
+             log: Callable[[str], None] = print, *, stop_grace_s: float = 60.0) -> dict[str, Any]:
     """Start the workers, stream a line per finished iteration, and return/write the summary.
     `runner(args_dict, worker_id, iteration) -> {"status": "pass"|"fail"|"error", ...}` must be a module-level
     function (it is sent to the worker processes)."""
@@ -92,7 +103,12 @@ def run_load(runner: Callable[..., dict], args_dict: dict[str, Any], load: LoadS
 
     results: list[dict[str, Any]] = []
     done = 0
+    # A duration limit has to stop a worker that never returns from one iteration. Without duration_s there is
+    # no known bound, so the parent keeps waiting for that worker.
+    deadline = (started + float(load.duration_s) + stop_grace_s) if load.duration_s is not None else None
     while done < n:
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         try:
             msg = queue.get(timeout=1.0)
         except Exception:  # queue.Empty -- also notice workers that died without saying goodbye
@@ -105,8 +121,9 @@ def run_load(runner: Callable[..., dict], args_dict: dict[str, Any], load: LoadS
         results.append(msg)
         log(f"  [worker {msg['worker']:02d} iter {msg['iteration']:03d}] {msg['status'].upper():5s} {msg['seconds']:6.1f}s"
             + (f"  {msg['error'][:120]}" if msg.get("error") else ""))
+    grace = 0.0 if deadline is not None and time.monotonic() >= deadline else 30.0
     for p in procs:
-        p.join(timeout=30)
+        _stop_worker(p, grace)
 
     elapsed = time.monotonic() - started
     summary = summarize(results, load, elapsed, [p.exitcode for p in procs])

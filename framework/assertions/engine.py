@@ -18,12 +18,18 @@ class AssertionResult:
         self.expected = expected
 
 
+def _any_visible(locator) -> bool:
+    """True when any match is visible. `target.nth` has already narrowed the locator when it is set."""
+    return any(locator.nth(i).is_visible() for i in range(locator.count()))
+
+
 def evaluate_expected(
     page: Page,
     expected: Expected,
     ctx: VariableContext,
     *,
     sql_row: Optional[dict[str, Any]] = None,
+    element: Any = None,
 ) -> AssertionResult:
     if expected.type == "none":
         return AssertionResult(True, None, None)
@@ -57,16 +63,21 @@ def evaluate_expected(
         return AssertionResult(actual == int(expected_value), actual, expected_value)
 
     if expected.type == "visible":
-        locator = build_semantic_locator(page, resolved_target)
-        actual = locator.count() > 0 and locator.first.is_visible()
-        return AssertionResult(bool(actual), actual, True)
+        if element is not None:
+            actual = bool(element.is_visible())
+        else:
+            actual = _any_visible(build_semantic_locator(page, resolved_target))
+        return AssertionResult(actual, actual, True)
 
     if expected.type == "hidden":
-        locator = build_semantic_locator(page, resolved_target)
-        actual = locator.count() == 0 or not locator.first.is_visible()
-        return AssertionResult(bool(actual), actual, True)
+        if element is not None:
+            actual = not bool(element.is_visible())
+        else:
+            actual = not _any_visible(build_semantic_locator(page, resolved_target))
+        return AssertionResult(actual, actual, True)
 
-    element = resolve_target(page, resolved_target)
+    if element is None:
+        element = resolve_target(page, resolved_target)
 
     if expected.type == "text_equals":
         actual = (element.text_content() or "").strip()

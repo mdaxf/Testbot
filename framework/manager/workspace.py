@@ -49,6 +49,19 @@ def check_id(value: Any, what: str = "id") -> str:
     return sid
 
 
+def contained_file(root: Path, relative: str) -> Path:
+    """`root / relative` when `relative` is a file inside `root`. Absolute paths and `..` are refused."""
+    base = Path(root).resolve()
+    text = str(relative or "").replace("\\", "/").strip()
+    path = Path(text)
+    if not text or path.is_absolute() or any(part == ".." for part in path.parts):
+        raise ValueError("path must stay inside the run folder")
+    target = (base / path).resolve()
+    if target != base and base not in target.parents:
+        raise ValueError("path must stay inside the run folder")
+    return target
+
+
 def resolve_within(base: Path, *parts: Any) -> Path:
     """`base / parts...` resolved; refused (WorkspaceError) if the result is not strictly inside `base`."""
     base = Path(base).resolve()

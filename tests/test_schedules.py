@@ -51,6 +51,17 @@ def test_setup_failure_never_leaves_the_schedule_running(ws):
     assert not schedules.read_state(ws, "broken").get("running")
 
 
+def test_results_subdir_cannot_leave_the_results_folder(ws, tmp_path):
+    outside = tmp_path / "outside"
+    rec = schedules.run_schedule(ws, {"id": "esc", "items": [], "results_subdir": "../../outside"})
+    assert rec["status"] == "error"
+    assert not outside.exists()
+    absolute = tmp_path / "abs"
+    rec = schedules.run_schedule(ws, {"id": "abs", "items": [], "results_subdir": str(absolute)})
+    assert rec["status"] == "error"
+    assert not absolute.exists()
+
+
 def test_run_schedule_records_history(ws, monkeypatch):
     monkeypatch.setattr(schedules, "item_command", lambda ws, item, d: [sys.executable, "-c", "print('hi')"])
     rec = schedules.run_schedule(ws, {"id": "ok", "items": [{"type": "suite", "path": "a.json"}]})

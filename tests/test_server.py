@@ -80,6 +80,38 @@ def test_email_test_uses_only_the_saved_server(ws, api):
     assert status == 400 and b"not the saved one" in body
 
 
+def test_host_header_cannot_pretend_to_be_loopback():
+    allowed = server.allowed_hosts_for("0.0.0.0", 8780)
+    assert "0.0.0.0:8780" not in allowed
+    assert server.host_is_allowed("127.0.0.1:8780", "127.0.0.1", allowed)
+    assert not server.host_is_allowed("127.0.0.1:8780", "10.1.2.3", allowed)
+    assert not server.host_is_allowed("0.0.0.0:8780", "127.0.0.1", allowed)
+    bound = server.allowed_hosts_for("192.168.1.5", 8780)
+    assert server.host_is_allowed("192.168.1.5:8780", "10.1.2.3", bound)
+    assert not server.host_is_allowed("127.0.0.1:8780", "10.1.2.3", bound)
+    assert server.host_is_allowed("[::1]:8780", "::1", server.allowed_hosts_for("::1", 8780))
+
+
+def test_negative_content_length_is_rejected(ws):
+    httpd, _ = server.create_server(ws, "127.0.0.1", 0, token=TOKEN)
+    port = httpd.server_address[1]
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        c.putrequest("POST", "/api/chat")
+        c.putheader("Host", f"127.0.0.1:{port}")
+        c.putheader("Cookie", f"tb_token={TOKEN}")
+        c.putheader("Content-Length", "-1")
+        c.endheaders()
+        status = c.getresponse().status
+        c.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert status == 400
+
+
 def test_adhoc_ids_are_unique_per_path():
     a = server.adhoc_id("adhoc-", "a/login.json", 40)
     b = server.adhoc_id("adhoc-", "b/login.json", 40)

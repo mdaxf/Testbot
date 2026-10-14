@@ -27,6 +27,37 @@ def test_groups_and_schedules_share_one_id_rule():
     assert groups.slug(".hidden name") == "hidden-name"
 
 
+def test_contained_file_and_evidence_names(tmp_path):
+    from framework.manager.workspace import contained_file
+    from framework.runner.orchestrator import evidence_filename
+
+    assert contained_file(tmp_path, "shot.png") == (tmp_path / "shot.png").resolve()
+    for bad in ("../outside.png", "/tmp/pwn.png", "a/../../x.png", ""):
+        with pytest.raises(ValueError):
+            contained_file(tmp_path, bad)
+    for case_id in ("/tmp/pwn", "../outside", "../../etc"):
+        name = evidence_filename(case_id, 1, "pass")
+        assert "/" not in name and "\\" not in name and name.endswith("_step1_pass.png")
+
+
+def test_heal_sink_stays_in_its_context():
+    import contextvars
+
+    from framework.locators import resolver
+
+    token = resolver.set_heal_sink(lambda *a: None)
+    try:
+        assert resolver.current_heal_sink() is not None
+
+        def other():
+            assert resolver.current_heal_sink() is None
+
+        contextvars.Context().run(other)
+    finally:
+        resolver.reset_heal_sink(token)
+    assert resolver.current_heal_sink() is None
+
+
 def test_resolve_within(tmp_path):
     assert resolve_within(tmp_path, "a", "b.json") == (tmp_path / "a" / "b.json").resolve()
     for parts in (("..", "x"), ("a/../../x",), (".",)):

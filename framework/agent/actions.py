@@ -14,7 +14,7 @@ from playwright.sync_api import Error as PlaywrightError, Page
 
 from framework import logs
 from framework.agent.config import AgentConfig, Profile
-from framework.agent.observer import ElementRef, Observer, PageWatch
+from framework.agent.observer import VERIFY_JS, ElementRef, Observer, PageWatch
 from framework.agent.policy import Policy, is_secret_name
 from framework.assertions.engine import evaluate_expected
 from framework.models import Expected, Target
@@ -91,8 +91,43 @@ class ToolExecutor:
             raise ToolError(f"unknown element '{element_id}'. Element ids change whenever the page changes -- use an id from the latest list.")
         return ref
 
-    def _loc(self, ref: ElementRef):
-        return ref.frame.locator(f'[data-tb-agent="{ref.id}"]').first
+    def _guard_location(self) -> None:
+        """The page, and any pop-up it opened, must still be on an allowed site after an action."""
+        pages = [self.page]
+        try:
+            pages = list(self.page.context.pages) or pages
+        except Exception:  # noqa: BLE001
+            pass
+        for page in pages:
+            try:
+                url = page.url
+            except Exception:  # noqa: BLE001
+                continue
+            if not url or url.startswith("about:"):
+                continue
+            problem = self.policy.check_navigation(url)
+            if problem:
+                raise ToolError(problem)
+
+    def _live(self, ref: ElementRef, *, act: bool) -> ElementRef:
+        """The element captured at observe time. A page that moves data-tb-agent cannot retarget the action."""
+        handle = ref.handle
+        if handle is None:
+            raise ToolError(f"element '{ref.id}' is no longer on the page")
+        try:
+            live = handle.evaluate(VERIFY_JS) or {}
+        except PlaywrightError as exc:
+            raise ToolError(f"element '{ref.id}' is no longer on the page") from exc
+        info = ref.info
+        if (live.get("name") or "") != (info.get("name") or ""):
+            raise ToolError(f"element '{ref.id}' changed on the page (its label is now {live.get('name')!r})")
+        if "type" in info and (live.get("type") or "") != (info.get("type") or ""):
+            raise ToolError(f"element '{ref.id}' changed type on the page")
+        if act:
+            problem = self.policy.check_press({**info, "name": live.get("name") or info.get("name") or ""})
+            if problem:
+                raise ToolError(problem)
+        return ref
 
     def _resolve_text(self, text: str) -> str:
         try:
@@ -164,38 +199,37 @@ class ToolExecutor:
             raise ToolError(problem)
         self.page.goto(url, timeout=30000)
         self.watch.settle()
+        self._guard_location()
         value = "{base_url}" + url[len(self.base_url):] if self.base_url and url.startswith(self.base_url) else url
         rec.export = [{"description": f"Open {url}", "action": "navigate", "target": {"strategy": "url", "value": value}}]
         return ToolOutcome(f"Opened {url}")
 
     def t_click(self, a, rec) -> ToolOutcome:
-        ref = self._ref(a.get("element"))
-        problem = self.policy.check_press(ref.info)
-        if problem:
-            raise ToolError(problem)
+        ref = self._live(self._ref(a.get("element")), act=True)
         stuck = self.policy.note_action(f"click:{ref.id}:{self.observer.last.url}")
         if stuck:
             raise ToolError(stuck)
         rec.target = self._export_target(ref)
-        loc = self._loc(ref)
-        loc.scroll_into_view_if_needed(timeout=ACTION_TIMEOUT_MS)
-        loc.click(timeout=ACTION_TIMEOUT_MS)
+        handle = ref.handle
+        handle.scroll_into_view_if_needed(timeout=ACTION_TIMEOUT_MS)
+        handle.click(timeout=ACTION_TIMEOUT_MS)
         self.watch.settle()
+        self._guard_location()
         label = ref.info.get("name") or ref.id
         rec.export = ([{"description": f"Click '{label}'", "action": "click", "target": rec.target}] + self._spinner_step(ref)) if rec.target else None
         return ToolOutcome(f"Clicked '{label}'")
 
     def t_type(self, a, rec) -> ToolOutcome:
-        ref = self._ref(a.get("element"))
+        ref = self._live(self._ref(a.get("element")), act=True)
         raw = str(a.get("text", ""))
         problem = self.policy.check_type(ref.info, raw)
         if problem:
             raise ToolError(problem)
         text = self._resolve_text(raw)
         rec.target = self._export_target(ref)
-        loc = self._loc(ref)
-        loc.fill(text, timeout=ACTION_TIMEOUT_MS)
+        ref.handle.fill(text, timeout=ACTION_TIMEOUT_MS)
         self.watch.settle(2.0)
+        self._guard_location()
         name = ref.info.get("name") or ref.id
         secret = ref.info.get("type") == "password" or bool(re.search(r"\{(\w+)\}", raw) and any(is_secret_name(v) for v in re.findall(r"\{(\w+)\}", raw)))
         self.data_log.append({"field": name, "value": "***" if secret else raw, "source": a.get("data_source") or "unspecified"})
@@ -203,32 +237,34 @@ class ToolExecutor:
         return ToolOutcome(f"Entered text into '{name}'")
 
     def t_select(self, a, rec) -> ToolOutcome:
-        ref = self._ref(a.get("element"))
+        ref = self._live(self._ref(a.get("element")), act=True)
         option = self._resolve_text(str(a.get("option", "")))
         rec.target = self._export_target(ref)
-        loc = self._loc(ref)
+        handle = ref.handle
         if ref.info.get("tag") == "select":
-            loc.select_option(option, timeout=ACTION_TIMEOUT_MS)
+            handle.select_option(option, timeout=ACTION_TIMEOUT_MS)
         else:                                   # HTML5 datalist "dropdown": type the value
-            loc.fill(option, timeout=ACTION_TIMEOUT_MS)
+            handle.fill(option, timeout=ACTION_TIMEOUT_MS)
         self.watch.settle(2.0)
+        self._guard_location()
         name = ref.info.get("name") or ref.id
         self.data_log.append({"field": name, "value": option, "source": a.get("data_source") or "unspecified"})
         rec.export = [{"description": f"Select '{option}' in '{name}'", "action": "select", "target": rec.target, "input": option}] if rec.target else None
         return ToolOutcome(f"Selected '{option}' in '{name}'")
 
     def t_check(self, a, rec) -> ToolOutcome:
-        ref = self._ref(a.get("element"))
+        ref = self._live(self._ref(a.get("element")), act=True)
         want = bool(a.get("checked", True))
         rec.target = self._export_target(ref)
-        loc = self._loc(ref)
+        handle = ref.handle
         try:
-            loc.set_checked(want, timeout=3000)
+            handle.set_checked(want, timeout=3000)
         except PlaywrightError:                 # custom-styled box whose real input is hidden: click its label
-            state = loc.evaluate("el => !!el.checked")
+            state = handle.evaluate("el => !!el.checked")
             if state != want:
-                loc.evaluate("el => { const l = el.labels && el.labels[0]; (l || el).click(); }")
+                handle.evaluate("el => { const l = el.labels && el.labels[0]; (l || el).click(); }")
         self.watch.settle(1.5)
+        self._guard_location()
         name = ref.info.get("name") or ref.id
         rec.export = [{"description": f"Set '{name}' to {str(want).lower()}", "action": "check", "target": rec.target, "input": str(want).lower()}] if rec.target else None
         return ToolOutcome(f"'{name}' is now {'ticked' if want else 'unticked'}")
@@ -236,13 +272,14 @@ class ToolExecutor:
     def t_press(self, a, rec) -> ToolOutcome:
         key = str(a.get("key", "Enter"))
         if a.get("element"):
-            ref = self._ref(a["element"])
+            ref = self._live(self._ref(a["element"]), act=True)
             rec.target = self._export_target(ref)
-            self._loc(ref).press(key, timeout=ACTION_TIMEOUT_MS)
+            ref.handle.press(key, timeout=ACTION_TIMEOUT_MS)
             rec.export = [{"description": f"Press {key}", "action": "press", "target": rec.target, "input": key}] if rec.target else None
         else:
             self.page.keyboard.press(key)
         self.watch.settle()
+        self._guard_location()
         return ToolOutcome(f"Pressed {key}")
 
     def t_wait_for_text(self, a, rec) -> ToolOutcome:
@@ -284,16 +321,20 @@ class ToolExecutor:
         self.notes.append(str(a.get("text", ""))[:500])
         return ToolOutcome("Noted.", observe=False)
 
-    def t_query_db(self, a, rec) -> ToolOutcome:
-        from framework.actions.sql_actions import run_query
-        from framework.manager.dataaccess import check_select_only
+    def _readonly_sql(self, query: str):
+        from framework.actions.sql_actions import readonly_query
 
         try:
-            query = check_select_only(self._resolve_text(str(a.get("query", ""))))
-        except ValueError as exc:
+            return readonly_query(self.ctx, query, allow_raw=False)
+        except (ValueError, MissingVariableError) as exc:
             raise ToolError(f"{exc} (the agent may only read the database)") from exc
+
+    def t_query_db(self, a, rec) -> ToolOutcome:
+        from framework.actions.sql_actions import run_query
+
+        query, params = self._readonly_sql(str(a.get("query", "")))
         try:
-            rows = run_query(self.sql.get_readonly(a.get("connection") or "default"), query, rollback=True)
+            rows = run_query(self.sql.get_readonly(a.get("connection") or "default"), query, params, rollback=True)
         except Exception as exc:  # noqa: BLE001
             raise ToolError(f"the query failed: {str(exc)[:200]}") from exc
         shown = [" | ".join(str(v) for v in r.values()) for r in rows[:15]]
@@ -335,7 +376,7 @@ class ToolExecutor:
         elif kind == "sql":
             passed, actual, expected = self._assert_sql(a)
         else:
-            ref = self._ref(a.get("element"))
+            ref = self._live(self._ref(a.get("element")), act=False)
             target = self._element_target(ref)
             export_target = self._export_target(ref)
             if kind == "element_text":
@@ -347,7 +388,7 @@ class ToolExecutor:
                 exp = Expected(type="visible" if kind == "element_visible" else "hidden", target=target)
             elif kind == "element_checked":
                 want = bool(a.get("checked", True))
-                state = self._loc(ref).evaluate("el => !!el.checked")
+                state = ref.handle.evaluate("el => !!el.checked")
                 passed, actual, expected = state == want, state, want
                 return self._record_assertion(rec, kind, a, passed, actual, expected, covers, export_target, None)
             elif kind == "css":
@@ -357,24 +398,20 @@ class ToolExecutor:
             else:
                 raise ToolError(f"unknown assertion kind '{kind}'. Kinds: text_present, text_absent, url_contains, url_equals, element_text, element_value, "
                                 "element_visible, element_hidden, element_checked, css, table_rows, sql")
-            res = evaluate_expected(self.page, exp, self.ctx)
+            res = evaluate_expected(self.page, exp, self.ctx, element=ref.handle)
             passed, actual, expected = res.passed, res.actual, res.expected
             export_expected = exp.model_dump(exclude_none=True, exclude={"target"})
         return self._record_assertion(rec, kind, a, passed, actual, expected, covers, export_target, export_expected)
 
     def _assert_sql(self, a) -> tuple[bool, Any, Any]:
         from framework.actions.sql_actions import run_query
-        from framework.manager.dataaccess import check_select_only
 
-        try:
-            query = check_select_only(self._resolve_text(str(a.get("query", ""))))
-        except ValueError as exc:
-            raise ToolError(f"{exc} (the agent may only read the database)") from exc
+        query, params = self._readonly_sql(str(a.get("query", "")))
         want = str(a.get("equals", ""))
         end, actual = time.monotonic() + 10, None
         while True:                               # the application may still be committing: retry for a few seconds
             try:
-                rows = run_query(self.sql.get_readonly(a.get("connection") or "default"), query, rollback=True)
+                rows = run_query(self.sql.get_readonly(a.get("connection") or "default"), query, params, rollback=True)
             except Exception as exc:  # noqa: BLE001
                 raise ToolError(f"the query failed: {str(exc)[:200]}") from exc
             col = a.get("column")

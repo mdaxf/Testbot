@@ -24,9 +24,10 @@ ad_demo_portal:
   connections: {}
 
 # Apriso 2023 test server. The password is NOT kept here: PWD={env:TESTBOT_DB_PASSWORD_WIN_APR23} is read from that environment
-# variable (or the .env file) when the connection is opened. Use a login that can only read (db_datareader) for queries the
-# agent or the "Try" dialog run; remove the connection if the agent should not read the database at all.
+# variable (or the .env file) when the connection is opened. UID is the placeholder read-only login testbot_reader; replace it
+# with the real read-only account for this server before connecting. Encryption is required. Remove the connection if the
+# agent should not read the database at all. The hostname below is the internal test server.
 win_apr23:
   base_url: "http://win-apr23/apriso/apriso"
   connections:
-    default: "Driver={ODBC Driver 18 for SQL Server};Server=win-apr23;Database=APRISO;UID=flxadmin;PWD={env:TESTBOT_DB_PASSWORD_WIN_APR23};Encrypt=no;TrustServerCertificate=yes;"
+    default: "Driver={ODBC Driver 18 for SQL Server};Server=win-apr23;Database=APRISO;UID=testbot_reader;PWD={env:TESTBOT_DB_PASSWORD_WIN_APR23};Encrypt=yes;"

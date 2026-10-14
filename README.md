@@ -402,7 +402,7 @@ design in `docs/AGENTIC_TESTING_RESEARCH.md`.
 `revisions.py`: sidecar store `<test_cases>/.revisions/<file>/` (`index.json`, `settings/sN.json`, `cases/<id>/<n>.json`, `chat.json`); case lineages + settings lineage + suite manifests (rN = {settings, cases:{id:rev}, order});
 the suite file on disk is the DEFAULT manifest materialised with `revision`/`status` fields (`save_default`, `sync` for outside edits, `make_default_case/manifest`, `add_draft`, `edit_*_revision` in place, `diff_*`, 50-revision retention).
 `testcases.save_test` goes through it (source/note), `read_test` syncs; the runner runs only `status: default` cases and records `revision` in results. `learn.py`: the `ai_recommendation` node (agent | heal) written after a PASSING run when
-`AgentConfig.learn` (orchestrator.suite_path; heals via `locators.resolver.HEAL_SINK` + `locators.describe.element_target`); review in the editor (`tests.js reviewRecommendation`), `manager/reviews.py` for the Reviews page.
+`AgentConfig.learn` (orchestrator.suite_path; heals via `locators.resolver.set_heal_sink` + `locators.describe.element_target`); review in the editor (`tests.js reviewRecommendation`), `manager/reviews.py` for the Reviews page.
 `chat.py`: per-suite conversation on disk, proposals validated with `suitefix` + `testcases.validate`, applied in the editor / as drafts / directly (AI page).
 
 ### Email after a session (`framework/emailer.py`)

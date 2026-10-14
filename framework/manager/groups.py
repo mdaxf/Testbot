@@ -455,6 +455,13 @@ def _local(iso: Optional[str]) -> str:
         return ""
 
 
+def _excel_cell(value: Any) -> Any:
+    """Prefix a spreadsheet formula so Excel treats the cell as text."""
+    if isinstance(value, str) and value.lstrip(" \t\r\n")[:1] in "=+-@":
+        return "'" + value
+    return value
+
+
 def export_csv(ws: Workspace, gid: str) -> str:
     g = read_group(ws, gid)
     t = track(ws, g)
@@ -462,8 +469,9 @@ def export_csv(ws: Workspace, gid: str) -> str:
     w = csv.writer(buf)
     w.writerow(["Group", "Test suite", "Test case", "Title", "Final result", "Final test (local time)", "Attempts", "First result", "Recorded by", "Comment / problem", "Members"])
     for r in t["cases"]:
-        w.writerow([g["name"], r["suite_id"], r["case_id"], r["title"], r["status"], _local(r["when"]), r["attempts"], r["first_status"] or "",
-                    (r["by"] or "") if r["kind"] == "manual" else "", (r["comment"] if r["kind"] == "manual" else r["problem"]) or "", "; ".join(r["sources"])])
+        w.writerow([_excel_cell(v) for v in (
+            g["name"], r["suite_id"], r["case_id"], r["title"], r["status"], _local(r["when"]), r["attempts"], r["first_status"] or "",
+            (r["by"] or "") if r["kind"] == "manual" else "", (r["comment"] if r["kind"] == "manual" else r["problem"]) or "", "; ".join(r["sources"]))])
     return buf.getvalue()
 
 

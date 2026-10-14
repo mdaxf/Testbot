@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import time
 
 from playwright.sync_api import ElementHandle, Page
@@ -18,7 +19,20 @@ class LocateError(Exception):
     pass
 
 
-HEAL_SINK = None      # set by the orchestrator for the duration of a case: callable(target, element_handle, description)
+_heal_sink: contextvars.ContextVar = contextvars.ContextVar("testbot_heal_sink", default=None)
+
+
+def set_heal_sink(fn):
+    """Record healed locators for the current context only. Returns the token for reset_heal_sink."""
+    return _heal_sink.set(fn)
+
+
+def reset_heal_sink(token) -> None:
+    _heal_sink.reset(token)
+
+
+def current_heal_sink():
+    return _heal_sink.get()
 
 
 def resolve_target(page: Page, target: Target, *, description: str = "", wait_ms: int = 0) -> ElementHandle:
@@ -54,9 +68,10 @@ def resolve_target(page: Page, target: Target, *, description: str = "", wait_ms
     fallback_description = description or target.value
     try:
         found = locate_by_description(page, fallback_description)
-        if HEAL_SINK is not None:                      # self-healing: remember what replaced the target that no longer matched
+        sink = current_heal_sink()
+        if sink is not None:                           # self-healing: remember what replaced the target that no longer matched
             try:
-                HEAL_SINK(target, found, fallback_description)
+                sink(target, found, fallback_description)
             except Exception:  # noqa: BLE001 - never let the bookkeeping break the step
                 pass
         return found

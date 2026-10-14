@@ -17,7 +17,7 @@ from framework.actions.executor import execute_action
 from framework.actions.integration_actions import (
     INTEGRATION_ACTIONS, StepAssertionFailed, close_subscriptions, run_integration_action,
 )
-from framework.actions.sql_actions import SqlConnections, run_exec, run_query
+from framework.actions.sql_actions import SqlConnections, readonly_query, run_exec, run_query
 from framework.assertions.engine import evaluate_expected
 from framework.locators.resolver import resolve_target
 from framework.models import CaseResult, StepResult, SuiteResult, TestCase, TestStep, TestSuite, Viewport
@@ -28,6 +28,17 @@ from framework.variables.generators import generate_faker_value
 
 run_log = logs.get("runner")
 step_log = logs.get("step")
+
+_EVIDENCE_UNSAFE = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def evidence_filename(case_id: str, step_no: int, status: str) -> str:
+    """One path segment. A case id is never used as a directory."""
+    cleaned = _EVIDENCE_UNSAFE.sub("_", str(case_id)).strip("._")[:80]
+    if not cleaned:
+        cleaned = "case"
+    safe_status = _EVIDENCE_UNSAFE.sub("_", str(status)).strip("._") or "status"
+    return f"{cleaned}_step{int(step_no)}_{safe_status}.png"
 
 
 class Orchestrator:
@@ -142,11 +153,11 @@ class Orchestrator:
         run_log.info("case %s - %s: started (%d step(s)%s)", case.id, case.title, len(case.steps), ", natural language" if case.objective and not case.steps else "")
         started_at = datetime.now(timezone.utc)
         self._heals = []
-        resolver.HEAL_SINK = self._record_heal
+        token = resolver.set_heal_sink(self._record_heal)
         try:
             result, ctx = self._run_case(page, case, ctx, **kwargs)
         finally:
-            resolver.HEAL_SINK = None
+            resolver.reset_heal_sink(token)
         self._save_heals(case, result)
         result.started_at, result.finished_at = started_at.isoformat(), datetime.now(timezone.utc).isoformat()
         result.revision = case.revision
@@ -249,8 +260,9 @@ class Orchestrator:
             elif source.source == "faker":
                 ctx.set(name, generate_faker_value(source.model_dump(exclude_none=True)))
             elif source.source == "sql":
-                conn = self.sql_connections.get(source.connection)
-                rows = run_query(conn, *ctx.resolve_sql(source.query or ""))      # values are bound parameters, never pasted into the SQL
+                conn = self.sql_connections.get_readonly(source.connection)
+                query, params = readonly_query(ctx, source.query or "", allow_raw=True)
+                rows = run_query(conn, query, params, rollback=True)      # values are bound parameters, never pasted into the SQL
                 if not rows:
                     raise ValueError(f"Variable '{name}': SQL query returned no rows")
                 column = source.column or next(iter(rows[0]))
@@ -274,9 +286,9 @@ class Orchestrator:
             sql_row: Optional[dict[str, Any]] = None
 
             if step.action == "sql_query":
-                conn = self.sql_connections.get(step.connection)
-                query, params = ctx.resolve_sql(step.query or "")       # values are bound parameters, never pasted into the SQL
-                rows = run_query(conn, query, params)
+                conn = self.sql_connections.get_readonly(step.connection)
+                query, params = readonly_query(ctx, step.query or "", allow_raw=True)
+                rows = run_query(conn, query, params, rollback=True)
                 sql_row = rows[0] if rows else None
                 if step.config and step.config.get("poll") and step.expected is not None:
                     # config.poll: the app may still be committing -- re-run until the expectation holds
@@ -284,7 +296,7 @@ class Orchestrator:
                     deadline = time.monotonic() + step.timeout_ms / 1000
                     while time.monotonic() < deadline and not evaluate_expected(page, step.expected, ctx, sql_row=sql_row).passed:
                         time.sleep(1)
-                        rows = run_query(conn, query, params)
+                        rows = run_query(conn, query, params, rollback=True)
                         sql_row = rows[0] if rows else None
             elif step.action == "sql_exec":
                 conn = self.sql_connections.get(step.connection)
@@ -302,7 +314,7 @@ class Orchestrator:
                 logs.get("integration").info("%s step %s %s: %s", case_id, step.step_no, step.action, logs.clip(logs.redact(summary), 300))
                 data_used = f"{data_used} | {summary}" if data_used else summary
             elif step.action != "assert":
-                execute_action(page, step, ctx)
+                execute_action(page, step, ctx, output_dir=self._run_dir)
 
             # give the app time to finish navigation/business logic before checking the
             # result -- Playwright's own auto-waiting doesn't know about app-side async work
@@ -486,7 +498,7 @@ class Orchestrator:
         if self.screenshots == "none" or (self.screenshots == "fail" and status == "pass"):
             return None
         try:
-            path = self._run_dir / f"{case_id}_step{step_no}_{status}.png"
+            path = self._run_dir / evidence_filename(case_id, step_no, status)
             branding.screenshot(page, path=str(path))
             return path.relative_to(self.report_dir).as_posix()  # forward slashes: valid as both an HTML href and a JSON path
         except Exception:  # noqa: BLE001 - a screenshot failure must not mask the real result
