@@ -110,6 +110,14 @@ OBSERVE_JS = "(args) => {" + _HELPERS_JS + r"""
   return { elements: out, tables, messages, text, popupPresent, total: els.length };
 }"""
 
+# Re-read the element the agent is about to use. `name` matches what OBSERVE_JS stored; `type` is set only for fields.
+VERIFY_JS = "(el) => {" + _HELPERS_JS + r"""
+  const tag = el.tagName.toLowerCase();
+  const out = { name: nameOf(el).slice(0, 80) };
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') out.type = (el.type || (tag === 'select' ? 'select' : 'text')).toLowerCase();
+  return out;
+}"""
+
 # a stable locator description for one element, used when a run is exported as a script (same priorities as the recorder)
 DESCRIBE_JS = "(el) => {" + _HELPERS_JS + r"""
   const q = sel => { try { return Array.from(document.querySelectorAll(sel)); } catch (_) { return []; } };
@@ -148,6 +156,7 @@ class ElementRef:
     frame: Frame
     frame_css: Optional[str]
     info: dict[str, Any]
+    handle: Any = None          # the element observed; actions use this, not a selector the page can retarget
 
 
 @dataclass
@@ -273,14 +282,14 @@ class Observer:
             popup = popup or data["popupPresent"]
             where = "" if label == "main" else f" @{label}"
             for info in data["elements"]:
-                elements[info["id"]] = ElementRef(info["id"], frame, css, info)
+                elements[info["id"]] = ElementRef(info["id"], frame, css, info, self._handle(frame, info["id"]))
                 lines.append(self._fmt_element(info, where))
             counter += len(data["elements"])
             if data["total"] > len(data["elements"]):
                 lines.append(f"  ... {data['total'] - len(data['elements'])} more controls not listed{where}")
             for t in data["tables"]:
                 tcounter += 1
-                elements[t["id"]] = ElementRef(t["id"], frame, css, {"id": t["id"], "role": "table", "name": "table"})
+                elements[t["id"]] = ElementRef(t["id"], frame, css, {"id": t["id"], "role": "table", "name": "table"}, self._handle(frame, t["id"]))
                 table_lines.append(f"[{t['id']}]{where} columns: {' | '.join(t['heads']) or '(none)'} -- {t['count']} rows; first rows:")
                 table_lines += [f"     {i}: {r}" for i, r in enumerate(t["rows"], start=1)]
             messages += [f"{m}{where}" for m in data["messages"]]
@@ -324,6 +333,13 @@ class Observer:
         if i.get("href"): bits.append(f"href={i['href']}")
         return "  " + " ".join(bits) + where
 
+    @staticmethod
+    def _handle(frame: Frame, element_id: str):
+        try:
+            return frame.query_selector(f'[data-tb-agent="{element_id}"]')
+        except Exception:  # noqa: BLE001 - frame navigating
+            return None
+
     def describe(self, ref: ElementRef) -> Optional[dict[str, Any]]:
         """A target for the element that REALLY resolves to exactly this element in Playwright (for script export).
         Candidates are tried in the recorder's priority order; the first that matches one element, and the tagged one, wins;
@@ -332,7 +348,9 @@ class Observer:
         from framework.models import Target
 
         try:
-            handle = ref.frame.locator(f'[data-tb-agent="{ref.id}"]').first.element_handle(timeout=2000)
+            handle = ref.handle
+            if handle is None:
+                handle = ref.frame.locator(f'[data-tb-agent="{ref.id}"]').first.element_handle(timeout=2000)
             candidates = handle.evaluate(DESCRIBE_JS) if handle else []
         except Exception:  # noqa: BLE001
             return None

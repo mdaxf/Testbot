@@ -23,6 +23,13 @@ _FORBIDDEN = re.compile(
     r"readtext|writetext|updatetext|xp_\w+|sp_\w+)\b",
     re.I,
 )
+# Routines and lock hints that a SELECT can still use to write, read server files, or stall the database.
+# Names are matched only outside strings and comments (see _code_only). A read-only login remains the real control.
+_DANGEROUS = re.compile(
+    r"\b(utl_\w+|dbms_\w+|dblink\w*|pg_(?:read_file|read_binary_file|ls_dir|sleep)|"
+    r"lo_(?:import|export|from_bytea)|tablockx|tablock|updlock|holdlock|xlock)\b",
+    re.I,
+)
 MAX_ROWS = 25
 
 
@@ -58,6 +65,8 @@ def _code_only(query: str) -> str:
             out.append(" ")
             i = n if j < 0 else j + 1
         elif query.startswith("/*", i):                     # block comment
+            if query.startswith("/*!", i):                  # MySQL executes these; they must not hide a statement
+                raise ValueError("conditional comments are not allowed")
             j = query.find("*/", i + 2)
             if j < 0:
                 raise ValueError("unterminated comment")
@@ -79,7 +88,7 @@ def check_select_only(query: str) -> str:
         raise ValueError("only a single statement is allowed")
     if not re.match(r"^(select|with)\b", code, re.I):
         raise ValueError("only SELECT queries can be tried here")
-    found = _FORBIDDEN.search(code)
+    found = _FORBIDDEN.search(code) or _DANGEROUS.search(code)
     if found:
         raise ValueError(f"'{found.group(1)}' is not allowed in a try-out query (read-only)")
     return q

@@ -22,12 +22,12 @@ def is_secret_name(name: str) -> bool:
 class Policy:
     def __init__(self, cfg: AgentConfig, profile: Profile, urls: list[str], objective: str, constraints: list[str]):
         self.cfg = cfg
-        self.allowed_hosts: set[str] = set(cfg.allowed_hosts) | set(profile.allowed_hosts)
+        self.allowed_hosts: set[str] = {h.lower() for h in cfg.allowed_hosts} | {h.lower() for h in profile.allowed_hosts}
         self.allow_file = False
         for u in urls:
             parts = urlsplit(u or "")
             if parts.netloc:
-                self.allowed_hosts.add(parts.netloc)
+                self.allowed_hosts.add(parts.netloc.lower())
             if parts.scheme == "file":
                 self.allow_file = True
         self.started = time.monotonic()
@@ -46,7 +46,7 @@ class Policy:
             return None if self.allow_file else "navigation to local files is not allowed for this test"
         if parts.scheme not in ("http", "https"):
             return f"only http(s) addresses are allowed (got '{parts.scheme or url}')"
-        if parts.netloc not in self.allowed_hosts:
+        if parts.netloc.lower() not in self.allowed_hosts:
             return f"'{parts.netloc}' is not an allowed site for this test (allowed: {', '.join(sorted(self.allowed_hosts)) or 'none'})"
         return None
 

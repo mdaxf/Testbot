@@ -12,6 +12,7 @@ Rules
   * tags                            -> every case that has any of the tags, in file order; with ids as well: those ids that have a tag
   * the same id listed twice        -> it runs twice; the repeat is named TC-5~2 (then ~3 ...) so results and screenshots never collide
   * an id (or tag) that is not in the file -> SelectionError (checked before any browser starts), naming what does exist
+  * an explicit id, or a depends_on target, that is not the default revision -> SelectionError. A full-file run skips non-default cases.
   * a case with `depends_on: [TC-LOGIN]` -> its prerequisites (and theirs) are put right before it and run in the SAME browser, so the
     login state is there; if the case just before it already is that prerequisite, nothing is added. Only when a selection is active.
 """
@@ -84,14 +85,22 @@ def select_cases(suite: TestSuite, wanted: Optional[Iterable[str]] = None, tags:
         ids, missing = [], []
         for w in _expand(wanted, set(by_id)):
             case = find(w)
-            (ids.append(case.id) if case else missing.append(w))
+            if case is None:
+                missing.append(w)
+                continue
+            if not _is_default(case):
+                status = getattr(case, "status", None) or "default"
+                raise SelectionError(
+                    f"{label}: {case.id} is '{status}', not the default revision. Make that revision the default before running it."
+                )
+            ids.append(case.id)
         if missing:
             raise SelectionError(f"{label}: test case(s) not found: {', '.join(missing)}. "
                                  f"The file has: {', '.join(c.id for c in suite.cases) or '(no test cases)'}")
         if want_tags:
             ids = [i for i in ids if _tags_of(by_id[i]) & want_tags]
     else:
-        ids = [c.id for c in suite.cases if _tags_of(c) & want_tags]
+        ids = [c.id for c in suite.cases if _is_default(c) and _tags_of(c) & want_tags]
     if want_tags and not ids:
         known = sorted({t for c in suite.cases for t in (getattr(c, "tags", None) or [])})
         raise SelectionError(f"{label}: no test case matches the tag(s) {', '.join(sorted(want_tags))}"
@@ -104,6 +113,12 @@ def select_cases(suite: TestSuite, wanted: Optional[Iterable[str]] = None, tags:
             target = find(dep)
             if target is None:
                 raise SelectionError(f"{label}: {cid} depends on '{dep}', which is not in the file")
+            if not _is_default(target):
+                status = getattr(target, "status", None) or "default"
+                raise SelectionError(
+                    f"{label}: {cid} depends on {target.id}, which is '{status}', not the default revision. "
+                    "Make that revision the default before running it."
+                )
             if target.id in trail or target.id == cid:
                 raise SelectionError(f"{label}: circular depends_on: {' -> '.join((*trail, cid, target.id))}")
             for p in prerequisites(target.id, (*trail, cid)) + [target.id]:

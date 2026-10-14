@@ -63,9 +63,9 @@ class VariableContext:
           * a bare placeholder (WHERE Id = {id}) becomes a parameter, except that a plain number is written inline
             (so TOP {n} and similar keep working);
           * inside [brackets] / "double quotes" (identifiers) the value is written inline, and only if it is a
-            plain name;
-          * {raw:name} writes the value inline unchanged -- an explicit opt-out for table/column names built at run
-            time; never use it with values that come from the application under test.
+            plain name. {raw:name} does not bypass that check: a value that closes the quotes would become SQL;
+          * {raw:name} outside quotes writes the value inline unchanged -- an explicit opt-out for table/column
+            names built at run time; never use it with values that come from the application under test.
         Returns (sql_with_question_marks, params)."""
         out: list[str] = []
         params: list[Any] = []
@@ -107,7 +107,7 @@ class VariableContext:
 
                 def ident(m: re.Match[str]) -> str:
                     value = str(self._value(m.group(2)))
-                    if m.group(1) or _IDENT_RE.match(value):
+                    if _IDENT_RE.match(value):
                         return value
                     raise ValueError(f"'{{{m.group(2)}}}' is used as a SQL name but its value is not a plain name: {value[:40]!r}")
 

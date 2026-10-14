@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from playwright.sync_api import Error as PlaywrightError, Page, expect
 
 from framework import branding
+from framework.manager.workspace import contained_file
 from framework.locators.resolver import resolve_target
 from framework.locators.semantic import build_semantic_locator
 from framework.models import TestStep
@@ -68,7 +70,7 @@ def _wait_until(page: Page, step: TestStep, ctx: VariableContext) -> None:
         )
 
 
-def execute_action(page: Page, step: TestStep, ctx: VariableContext) -> None:
+def execute_action(page: Page, step: TestStep, ctx: VariableContext, *, output_dir=None) -> None:
     """Handles UI actions. sql_query/sql_exec/set_var/assert are handled directly
     by the orchestrator, since they need the SQL connection / assertion engine.
     """
@@ -88,7 +90,12 @@ def execute_action(page: Page, step: TestStep, ctx: VariableContext) -> None:
         return
 
     if action == "screenshot":
-        branding.screenshot(page, path=ctx.resolve_string(step.input or "screenshot.png"))
+        if output_dir is None:
+            raise ValueError(f"Step {step.step_no}: screenshot needs the run folder")
+        name = ctx.resolve_string(step.input or "screenshot.png")
+        path = contained_file(Path(output_dir), name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        branding.screenshot(page, path=str(path))
         return
 
     if action == "scan":

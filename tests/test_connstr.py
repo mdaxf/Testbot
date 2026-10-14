@@ -22,6 +22,24 @@ def test_mask_and_unmask():
         connstr.unmask("Server=s;PWD=***;", None)
 
 
+def test_password_with_spaces_around_equals_is_masked():
+    spaced = "Server=s;PWD = hunter2;Encrypt=yes;"
+    masked = connstr.mask(spaced)
+    assert "hunter2" not in masked and connstr.is_masked(masked)
+    assert connstr.unmask(masked, spaced) == spaced
+    assert connstr.mask("Password = {env:TESTBOT_DB_X};") == "Password = {env:TESTBOT_DB_X};"
+    assert connstr.is_masked(spaced) is False
+
+
+def test_sample_login_is_not_a_privileged_account():
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parent.parent / "config" / "environments.yaml").read_text(encoding="utf-8").lower()
+    assert "flxadmin" not in text
+    assert "encrypt=no" not in text
+    assert "trustservercertificate=yes" not in text
+
+
 def test_expand_only_testbot_db_variables():
     env = {"TESTBOT_DB_PW": "a;b}", "ANTHROPIC_API_KEY": "sk"}
     assert connstr.expand("PWD={env:TESTBOT_DB_PW};", env) == "PWD={a;b}}};"

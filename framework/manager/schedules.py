@@ -368,7 +368,8 @@ def run_schedule(ws: Workspace, sched: dict[str, Any], trigger: str = "manual",
         started = datetime.now()
         slog.info("schedule %s started (%s), %d item(s)", sid, trigger, len(sched.get("items", [])))
         run_id = started.strftime("%Y%m%d-%H%M%S")
-        run_dir = ws.dir("results") / (sched.get("results_subdir") or sid) / run_id
+        subdir = str(sched.get("results_subdir") or sid)
+        run_dir = ws.safe_path("results", f"{subdir}/{run_id}")   # refused before mkdir when the subdir leaves the results folder
         run_dir.mkdir(parents=True, exist_ok=True)
         record.update(run_id=run_id, started=started.isoformat(timespec="seconds"), dir=ws.rel("results", run_dir))
         state = read_state(ws, sid)

@@ -35,6 +35,14 @@ BYPASSES = [
     "",
     "   ;  ",
     "SELECT 'unterminated",
+    "SELECT DBMS_XMLGEN.GETXML('delete from t') FROM dual",
+    "SELECT UTL_HTTP.REQUEST('http://x') FROM dual",
+    "SELECT UTL_FILE.FREMOVE('d', 'f') FROM dual",
+    "SELECT pg_read_file('/etc/passwd')",
+    "SELECT dblink_exec('c', 'drop table t')",
+    "SELECT 1 /*! DROP TABLE t */",
+    "SELECT * FROM t WITH (TABLOCKX)",
+    "SELECT pg_sleep(10)",
 ]
 
 
@@ -54,6 +62,8 @@ def test_rejects_writes_and_bypasses(query):
     "SELECT COUNT(*) FROM ORDERS WHERE OrderNo = 'O''Brien'",
     "SELECT a FROM t ORDER BY a OFFSET 0 ROWS FETCH NEXT 5 ROWS ONLY",
     "SELECT UpdatedOn, CreatedBy, DataSet FROM t;",
+    "SELECT 1 UNION SELECT 2",
+    "SELECT * FROM t WITH (NOLOCK)",
 ])
 def test_accepts_plain_selects(query):
     assert check_select_only(query)

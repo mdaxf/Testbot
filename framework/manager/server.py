@@ -601,7 +601,8 @@ def make_handler(app: App, token: str, allowed_hosts: set[str]):
             self._send(status, json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8"), "application/json; charset=utf-8")
 
         def _host_ok(self) -> bool:
-            return (self.headers.get("Host") or "").lower() in allowed_hosts
+            peer = self.client_address[0] if self.client_address else ""
+            return host_is_allowed(self.headers.get("Host") or "", peer, allowed_hosts)
 
         def _authed(self) -> bool:
             cookie = SimpleCookie(self.headers.get("Cookie") or "")
@@ -644,7 +645,12 @@ def make_handler(app: App, token: str, allowed_hosts: set[str]):
                 return self._json(404, {"error": f"no such endpoint {method} {url.path}"})
             body: Any = {}
             if method in ("POST", "PUT", "DELETE"):
-                length = int(self.headers.get("Content-Length") or 0)
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    return self._json(400, {"error": "bad Content-Length"})
+                if length < 0:
+                    return self._json(400, {"error": "bad Content-Length"})
                 if length > MAX_BODY:
                     return self._json(413, {"error": "request too large"})
                 raw = self.rfile.read(length) if length else b""
@@ -682,6 +688,47 @@ def make_handler(app: App, token: str, allowed_hosts: set[str]):
     return Handler
 
 
+_LOOPBACK_NAMES = {"localhost", "127.0.0.1", "::1"}
+_LOOPBACK_PEERS = {"127.0.0.1", "::1"}
+
+
+def _hostname_of(host_header: str) -> str:
+    header = (host_header or "").strip().lower()
+    if header.startswith("["):
+        end = header.find("]")
+        return header[1:end] if end > 1 else header
+    if header.count(":") == 1:
+        return header.rsplit(":", 1)[0]
+    return header
+
+
+def allowed_hosts_for(host: str, port: int) -> set[str]:
+    """Host headers this bind address will accept.
+
+    A wildcard bind (`0.0.0.0` / `::`) is not itself an allowed Host. Loopback names are always
+    listed so a local browser can open the manager; `host_is_allowed` still requires a loopback peer
+    for those names, so a remote client cannot send `Host: 127.0.0.1`.
+    """
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    names = {shown, "127.0.0.1", "localhost"}
+    if host not in ("0.0.0.0", "::"):
+        names.add(host)
+
+    def label(name: str) -> str:
+        return f"[{name}]" if ":" in name and not name.startswith("[") else name
+
+    return {f"{label(h)}:{port}".lower() for h in names}
+
+
+def host_is_allowed(host_header: str, peer: str, allowed: set[str]) -> bool:
+    header = (host_header or "").strip().lower()
+    if header not in {h.lower() for h in allowed}:
+        return False
+    if _hostname_of(header) in _LOOPBACK_NAMES and (peer or "") not in _LOOPBACK_PEERS:
+        return False
+    return True
+
+
 def create_server(ws: Workspace, host: Optional[str] = None, port: Optional[int] = None, token: Optional[str] = None):
     """Returns (server, url_with_token). The caller runs server.serve_forever()."""
     host = host or ws.data["server"]["host"]
@@ -692,7 +739,7 @@ def create_server(ws: Workspace, host: Optional[str] = None, port: Optional[int]
     httpd = ThreadingHTTPServer((host, port), BaseHTTPRequestHandler)   # handler class is set once the real port is known
     actual_port = httpd.server_address[1]
     shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
-    allowed = {f"{h}:{actual_port}" for h in {host, shown, "127.0.0.1", "localhost"}}
+    allowed = allowed_hosts_for(host, actual_port)
     httpd.RequestHandlerClass = make_handler(app, token, allowed)
     httpd.app = app  # type: ignore[attr-defined]
     return httpd, f"http://{shown}:{actual_port}/?token={token}"
