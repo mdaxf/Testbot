@@ -251,7 +251,7 @@ class App:
         if not cs and b.get("env"):
             cs = (envs.get(b["env"], {}).get("connections", {}) or {}).get(b.get("connection", "default"), "")
         try:
-            cs = dataaccess.find_stored_connection(envs, cs, b.get("env") or "", b.get("connection") or "default")   # the page only has *** for the password
+            cs = dataaccess.connection_for_try(envs, cs, b.get("env") or "", b.get("connection") or "default")   # the page only has *** for the password
             return dataaccess.run_select(cs, b.get("query", ""))
         except ValueError as exc:
             raise ApiError(400, str(exc))

@@ -457,7 +457,7 @@ def _local(iso: Optional[str]) -> str:
 
 def _excel_cell(value: Any) -> Any:
     """Prefix a spreadsheet formula so Excel treats the cell as text."""
-    if isinstance(value, str) and value.lstrip(" \t\r\n")[:1] in "=+-@":
+    if isinstance(value, str) and (head := value.lstrip(" \t\r\n")[:1]) and head in "=+-@":
         return "'" + value
     return value
 

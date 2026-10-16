@@ -36,6 +36,11 @@ def expand(cs: str, env: Optional[Mapping[str, str]] = None) -> str:
     return _ENV_REF.sub(sub, cs or "")
 
 
+def has_env_ref(cs: str) -> bool:
+    """True when the connection string reads a password from an environment variable ({env:NAME})."""
+    return bool(_ENV_REF.search(cs or ""))
+
+
 def _is_masked_value(value: str) -> bool:
     return value == MASK
 
