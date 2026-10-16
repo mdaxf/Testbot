@@ -20,9 +20,10 @@ from framework.actions.integration_actions import (
 from framework.actions.sql_actions import SqlConnections, readonly_query, run_exec, run_query
 from framework.assertions.engine import evaluate_expected
 from framework.locators.resolver import resolve_target
+from framework.manager.workspace import contained_file
 from framework.models import CaseResult, StepResult, SuiteResult, TestCase, TestStep, TestSuite, Viewport
 from framework.runner.context_options import resolve_context_options
-from framework.runner.selection import describe, select_cases
+from framework.runner.selection import check_report_id, describe, select_cases
 from framework.variables.context import MissingVariableError, VariableContext
 from framework.variables.generators import generate_faker_value
 
@@ -89,6 +90,7 @@ class Orchestrator:
     def start_run_dir(self, name: str) -> Path:
         """Every run (a standalone suite, or a whole multi-file session) gets its own
         screenshot folder under report_dir so evidence from repeated runs never overwrites."""
+        contained_file(self.report_dir, name)       # refused when the name would leave the reports folder
         self._run_dir = self.report_dir / name
         self._run_dir.mkdir(parents=True, exist_ok=True)
         logs.attach_run_log(self._run_dir)   # run.log next to the screenshots
@@ -97,6 +99,7 @@ class Orchestrator:
     def run_suite(self, suite: TestSuite, case_ids: Optional[list[str]] = None, tags: Optional[list[str]] = None) -> SuiteResult:
         """Run the suite. `case_ids` = only those cases, in that order; `tags` = the cases with those tags (see framework.runner.selection);
         neither = all cases in file order."""
+        check_report_id(suite.suite_id)                     # it names the run folder: refused before any browser starts
         selected = select_cases(suite, case_ids, tags)     # an unknown id / tag fails here, before any browser starts
         if (suite.status or "default") != "default":
             run_log.warning("suite %s is marked '%s' (revision %s), not the default revision: running it as it is", suite.suite_id, suite.status, suite.revision)

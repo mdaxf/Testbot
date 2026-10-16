@@ -15,7 +15,7 @@ from framework.loaders.json_loader import load_suite_from_json
 from framework.models import CaseResult, SessionPlan, SessionResult, SuiteResult, TestSuite
 from framework.runner.context_options import resolve_context_options
 from framework.runner.orchestrator import Orchestrator
-from framework.runner.selection import SelectionError, describe, select_cases
+from framework.runner.selection import SelectionError, check_report_id, describe, select_cases
 from framework.variables.context import VariableContext
 
 log = logs.get("runner")
@@ -34,6 +34,10 @@ def resolve_plan(plan: SessionPlan) -> list:
     """Load every file of the plan and resolve its case selection. A wrong file or case id is reported (all of them at once)
     as a SelectionError before any browser starts. Returns [(entry, suite, selected cases)]."""
     prepared, problems = [], []
+    try:
+        check_report_id(plan.session_id, "session_id")
+    except SelectionError as exc:
+        problems.append(str(exc))
     for file_entry in plan.files:
         try:
             suite = _load_suite(file_entry.path)

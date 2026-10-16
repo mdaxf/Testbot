@@ -17,7 +17,7 @@ from framework.loaders.session_loader import load_session_plan
 from framework.runner.context_options import parse_viewport_arg
 from framework.runner.load import CONFIRM_ABOVE_WORKERS, LoadSettings, format_summary, resolve_load, run_load
 from framework.runner.orchestrator import Orchestrator
-from framework.runner.selection import SelectionError, parse_case_args, select_cases
+from framework.runner.selection import SelectionError, check_report_id, parse_case_args, select_cases
 from framework.runner.reporting import (
     write_html_report,
     write_json_result,
@@ -104,6 +104,14 @@ def _load_suite_file(path: Path):
     raise ValueError(f"Unsupported suite file type: {path.suffix}")
 
 
+def _report_file(report_dir: Path, name: str) -> Path:
+    """`report_dir / name`, refused when a suite or session id would put the file outside the reports folder."""
+    from framework.manager.workspace import contained_file
+
+    contained_file(report_dir, name)
+    return report_dir / name
+
+
 def _screenshot_mode(args: argparse.Namespace, load: LoadSettings) -> str:
     return getattr(args, "screenshots", None) or ("fail" if load.is_load else "all")
 
@@ -118,9 +126,9 @@ def _run_suite_once(args: argparse.Namespace, suite, report_dir: Path, extra_var
     finally:
         sql_connections.close_all()
     report_dir.mkdir(parents=True, exist_ok=True)
-    write_html_report(result, report_dir / f"{suite.suite_id}.html")
-    write_junit_xml(result, report_dir / f"{suite.suite_id}-junit.xml")
-    write_json_result(result, report_dir / f"{suite.suite_id}-result.json")
+    write_html_report(result, _report_file(report_dir, f"{suite.suite_id}.html"))
+    write_junit_xml(result, _report_file(report_dir, f"{suite.suite_id}-junit.xml"))
+    write_json_result(result, _report_file(report_dir, f"{suite.suite_id}-result.json"))
     return result
 
 
@@ -133,13 +141,13 @@ def _run_session_once(args: argparse.Namespace, plan, report_dir: Path, extra_va
     finally:
         sql_connections.close_all()
     report_dir.mkdir(parents=True, exist_ok=True)
-    write_session_html_report(result, report_dir / f"{plan.session_id}.html")
-    write_session_junit_xml(result, report_dir / f"{plan.session_id}-junit.xml")
-    write_session_json_result(result, report_dir / f"{plan.session_id}-result.json")
+    write_session_html_report(result, _report_file(report_dir, f"{plan.session_id}.html"))
+    write_session_junit_xml(result, _report_file(report_dir, f"{plan.session_id}-junit.xml"))
+    write_session_json_result(result, _report_file(report_dir, f"{plan.session_id}-result.json"))
     if notify:                      # an email when the session completes (only for a normal run, not for every load-test iteration)
         from framework import emailer
 
-        args._email_note = emailer.notify_session(plan, result, env_config, plan.environment, report_dir / f"{plan.session_id}.html")
+        args._email_note = emailer.notify_session(plan, result, env_config, plan.environment, _report_file(report_dir, f"{plan.session_id}.html"))
     return result
 
 
@@ -219,6 +227,7 @@ def run_suite_command(args: argparse.Namespace) -> int:
         print("Open the file in the manager's editor (the Validate button marks each step) and fix them.")
         return 2
     try:
+        check_report_id(suite.suite_id)                 # it names the report files
         select_cases(suite, parse_case_args(getattr(args, "case", None)), parse_case_args(getattr(args, "tag", None)))     # fail fast on an unknown id, with the list of real ones
     except SelectionError as exc:
         print(f"ERROR: {exc}")

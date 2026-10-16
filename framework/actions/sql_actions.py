@@ -166,6 +166,9 @@ def run_exec(conn: pyodbc.Connection, sql: str, params: Optional[Sequence[Any]] 
             mark_broken(conn)
         raise
     finally:
-        cursor.close()
+        try:
+            cursor.close()
+        except Exception:  # noqa: BLE001 - a dead connection may already be closed; keep the statement's own error
+            pass
     log.info("statement executed: %s -> %d row(s) affected (%d ms)", logs.clip(logs.redact(sql), 200), affected, int((time.monotonic() - t0) * 1000))
     return affected

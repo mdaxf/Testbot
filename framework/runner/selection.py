@@ -29,6 +29,18 @@ class SelectionError(ValueError):
     pass
 
 
+def check_report_id(value: object, what: str = "suite_id") -> str:
+    """A suite_id / session_id names report files and the run folder, so it follows the workspace id rule (no path
+    separators, no '..'). Refused, not renamed, so the reports keep the name the file gives them."""
+    from framework.manager.workspace import ID_RE
+
+    text = str(value if value is not None else "")
+    if not ID_RE.match(text):
+        raise SelectionError(f"{what} {text[:60]!r} cannot name a report: use letters, digits, '-', '_' or '.' "
+                             "(max 60 characters, not starting with '.')")
+    return text
+
+
 class Selection(list):
     """The cases to run, in run order (a list of TestCase), plus:
        .chain[i]  True = case i continues the browser and variables of case i-1 (a prerequisite that ran just before it)

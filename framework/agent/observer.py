@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from urllib.parse import urlsplit
 
 from playwright.sync_api import Frame, Page
@@ -236,15 +236,35 @@ class PageWatch:
 
 
 class Observer:
-    def __init__(self, page: Page, profile: Profile, watch: PageWatch, secret_values: Optional[set[str]] = None):
+    def __init__(self, page: Page, profile: Profile, watch: PageWatch, secret_values: Optional[set[str]] = None,
+                 url_problem: Optional[Callable[[str], Optional[str]]] = None):
         self.page, self.profile, self.watch = page, profile, watch
         self.secrets = secret_values or set()
         self.last: Optional[Observation] = None
+        self.url_problem = url_problem      # Policy.check_navigation: a page or frame on a disallowed site is never described
+
+    def _disallowed(self, url: str) -> Optional[str]:
+        if self.url_problem is None or not url or url.startswith("about:"):
+            return None
+        return self.url_problem(url)
+
+    def _release(self) -> None:
+        """Dispose of the element handles of the previous observation; each snapshot creates new ones."""
+        if self.last is None:
+            return
+        for ref in self.last.elements.values():
+            if ref.handle is not None:
+                try:
+                    ref.handle.dispose()
+                except Exception:  # noqa: BLE001 - the page navigated or closed
+                    pass
 
     def _frames(self) -> list[tuple[Frame, Optional[str], str]]:
         out: list[tuple[Frame, Optional[str], str]] = [(self.page.main_frame, None, "main")]
         for frame in self.page.frames:
             if frame == self.page.main_frame or frame.url in ("", "about:blank") or frame.parent_frame != self.page.main_frame:
+                continue
+            if self._disallowed(frame.url):                 # a third-party frame: not listed, so the agent cannot act on it
                 continue
             try:
                 el = frame.frame_element()
@@ -267,6 +287,12 @@ class Observer:
     def snapshot(self, settle: bool = True) -> Observation:
         if settle:
             self.watch.settle()
+        self._release()
+        problem = self._disallowed(self.page.url)
+        if problem:                                         # never show the model a page from a site the test may not use
+            obs = Observation(url="", title="", text=f"URL: (not shown)\nThe page is on a site that is not allowed: {problem}.")
+            self.last = obs
+            return obs
         elements: dict[str, ElementRef] = {}
         lines: list[str] = []
         table_lines: list[str] = []

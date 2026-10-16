@@ -91,26 +91,73 @@ class ToolExecutor:
             raise ToolError(f"unknown element '{element_id}'. Element ids change whenever the page changes -- use an id from the latest list.")
         return ref
 
-    def _guard_location(self) -> None:
-        """The page, and any pop-up it opened, must still be on an allowed site after an action."""
-        pages = [self.page]
+    def _pages(self) -> list[Any]:
         try:
-            pages = list(self.page.context.pages) or pages
+            return list(self.page.context.pages) or [self.page]
         except Exception:  # noqa: BLE001
-            pass
-        for page in pages:
+            return [self.page]
+
+    def _url_problem(self, url: str) -> Optional[str]:
+        if not url or url.startswith("about:"):
+            return None
+        return self.policy.check_navigation(url)
+
+    def location_problem(self) -> Optional[str]:
+        """Why the page, or a pop-up it opened, is on a site this test may not use; None when every page is allowed."""
+        for page in self._pages():
             try:
                 url = page.url
             except Exception:  # noqa: BLE001
                 continue
-            if not url or url.startswith("about:"):
-                continue
-            problem = self.policy.check_navigation(url)
+            problem = self._url_problem(url)
             if problem:
-                raise ToolError(problem)
+                return problem
+        return None
+
+    def _leave_disallowed(self) -> None:
+        """Close pop-ups on a disallowed site and take the main page back (or to a blank page), so nothing acts on it
+        and its content is never shown to the model."""
+        for page in self._pages():
+            if page is self.page:
+                continue
+            try:
+                if self._url_problem(page.url):
+                    page.close()
+            except Exception:  # noqa: BLE001 - already closed
+                pass
+        for step in ("back", "blank"):
+            try:
+                if not self._url_problem(self.page.url):
+                    return
+                if step == "back":
+                    self.page.go_back(timeout=10000)
+                else:
+                    self.page.goto("about:blank", timeout=10000)
+                self.watch.settle()
+            except Exception:  # noqa: BLE001 - no history / the page is closing
+                continue
+
+    def _guard_location(self, *, before: bool = False) -> None:
+        """The page, and any pop-up it opened, must be on an allowed site, before an action (nothing is done) and after it."""
+        problem = self.location_problem()
+        if problem:
+            self._leave_disallowed()
+            raise ToolError(f"{problem}. " + ("Nothing was done; " if before else "") + "the page was taken back off that site")
+
+    def _guard_frame(self, ref: ElementRef) -> None:
+        try:
+            url = ref.frame.url if ref.frame is not None else ""
+        except Exception:  # noqa: BLE001
+            url = ""
+        problem = self._url_problem(url)
+        if problem:
+            raise ToolError(f"element '{ref.id}' is in a frame from a site that is not allowed ({problem})")
 
     def _live(self, ref: ElementRef, *, act: bool) -> ElementRef:
-        """The element captured at observe time. A page that moves data-tb-agent cannot retarget the action."""
+        """The element captured at observe time. A page that moves data-tb-agent cannot retarget the action.
+        The page and the element's frame must be on an allowed site before anything is done with it."""
+        self._guard_location(before=True)
+        self._guard_frame(ref)
         handle = ref.handle
         if handle is None:
             raise ToolError(f"element '{ref.id}' is no longer on the page")
@@ -277,6 +324,7 @@ class ToolExecutor:
             ref.handle.press(key, timeout=ACTION_TIMEOUT_MS)
             rec.export = [{"description": f"Press {key}", "action": "press", "target": rec.target, "input": key}] if rec.target else None
         else:
+            self._guard_location(before=True)
             self.page.keyboard.press(key)
         self.watch.settle()
         self._guard_location()
