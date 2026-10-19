@@ -724,7 +724,8 @@ def host_is_allowed(host_header: str, peer: str, allowed: set[str]) -> bool:
     header = (host_header or "").strip().lower()
     if header not in {h.lower() for h in allowed}:
         return False
-    if _hostname_of(header) in _LOOPBACK_NAMES and (peer or "") not in _LOOPBACK_PEERS:
+    peer = (peer or "").lower().removeprefix("::ffff:")        # a dual-stack socket reports IPv4 clients as ::ffff:a.b.c.d
+    if _hostname_of(header) in _LOOPBACK_NAMES and peer not in _LOOPBACK_PEERS:
         return False
     return True
 

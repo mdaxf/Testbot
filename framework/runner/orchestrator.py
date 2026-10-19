@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from datetime import datetime, timezone
@@ -39,6 +40,8 @@ def evidence_filename(case_id: str, step_no: int, status: str) -> str:
     if not cleaned:
         cleaned = "case"
     safe_status = _EVIDENCE_UNSAFE.sub("_", str(status)).strip("._") or "status"
+    if cleaned != str(case_id):           # sanitising is lossy: 'TC-5~2' and 'TC-5_2' must not share a file
+        cleaned = f"{cleaned[:70]}-{hashlib.sha1(str(case_id).encode('utf-8')).hexdigest()[:8]}"
     return f"{cleaned}_step{int(step_no)}_{safe_status}.png"
 
 

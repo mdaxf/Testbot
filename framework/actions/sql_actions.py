@@ -73,10 +73,15 @@ class SqlConnections:
         Replaces any previous overrides, so one file's settings never leak into the next."""
         merged = {**self._defaults, **overrides}
         for name in [n for n in self._open if merged.get(n) != self._connection_strings.get(n)]:
-            self._open.pop(name).close()
+            self._drop(self._open.pop(name))
         for name in [n for n in self._readonly if merged.get(n) != self._connection_strings.get(n)]:
-            self._readonly.pop(name).close()
+            self._drop(self._readonly.pop(name))
         self._connection_strings = merged
+
+    @staticmethod
+    def _drop(conn: Any) -> None:
+        _BROKEN.discard(id(conn))        # a later connection may be given this id
+        conn.close()
 
     def get(self, name: str = "default") -> pyodbc.Connection:
         if name not in self._connection_strings:
@@ -147,9 +152,9 @@ def run_query(conn: pyodbc.Connection, sql: str, params: Optional[Sequence[Any]]
         if rollback:
             try:
                 conn.rollback()
-            except Exception:  # noqa: BLE001 - a dead connection cannot roll back; keep the query error
-                if id(conn) not in _BROKEN:
-                    raise
+            except Exception as exc:  # noqa: BLE001 - never replace the query's own error (or a result) with a rollback failure
+                mark_broken(conn)
+                log.warning("rollback failed: %s", logs.clip(logs.redact(exc), 200))
     log.debug("query: %s -> %d row(s) (%d ms)", logs.clip(logs.redact(sql), 300), len(rows), int((time.monotonic() - t0) * 1000))
     return rows
 

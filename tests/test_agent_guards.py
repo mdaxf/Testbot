@@ -71,11 +71,11 @@ def test_navigation_is_rechecked_after_redirect():
         ex.t_navigate({"url": "https://app.example/home"}, ActionRecord(1, "navigate", {}, True, ""))
 
 
-def test_click_uses_the_observed_element_and_refuses_a_changed_label():
+def test_click_judges_the_label_the_element_has_now():
     handle = _Handle(name="Delete")
     ref = ElementRef("e1", None, None, {"id": "e1", "name": "Save", "role": "button"}, handle)
     ex = _executor({"e1": ref})
-    with pytest.raises(ToolError, match="changed"):
+    with pytest.raises(ToolError, match="destructive"):
         ex.t_click({"element": "e1"}, ActionRecord(1, "click", {}, True, ""))
     assert handle.clicked is False
 
@@ -121,3 +121,11 @@ def test_allowed_hosts_ignore_case():
     policy = Policy(AgentConfig(allowed_hosts=["App.Example:443"]), Profile(), [], "look", [])
     assert policy.check_navigation("https://app.example:443/path") is None
     assert policy.check_navigation("https://other.example/path")
+
+
+def test_a_harmless_label_change_is_still_the_same_element():
+    handle = _Handle(name="Saving...")
+    ref = ElementRef("e1", None, None, {"id": "e1", "name": "Save", "role": "button"}, handle)
+    ex = _executor({"e1": ref})
+    ex.t_click({"element": "e1"}, ActionRecord(1, "click", {}, True, ""))
+    assert handle.clicked is True

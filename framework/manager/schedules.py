@@ -249,12 +249,8 @@ def _kill_tree(proc: subprocess.Popen, grace_s: float = CANCEL_GRACE_S) -> None:
     if proc.poll() is not None:
         return
     if os.name == "nt":
-        subprocess.run(["taskkill", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
-        try:
-            proc.wait(timeout=grace_s)
-            return
-        except subprocess.TimeoutExpired:
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
+        # No polite pass: without /F, taskkill does not end a console child, so every cancel would wait out the grace period.
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
     else:
         try:
             os.killpg(proc.pid, signal.SIGTERM)

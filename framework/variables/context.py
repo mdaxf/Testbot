@@ -5,7 +5,7 @@ from typing import Any
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 _SQL_PLACEHOLDER_RE = re.compile(r"\{(raw:)?([a-zA-Z_][a-zA-Z0-9_]*)\}")
-_NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
+_NUMBER_RE = re.compile(r"^-?(0|[1-9]\d*)(\.\d+)?$")      # canonical only: "007" or "0001234" is an identifier and stays a bound parameter
 _IDENT_RE = re.compile(r"^[A-Za-z0-9_ .$#@-]*$")
 
 

@@ -166,8 +166,8 @@ class ToolExecutor:
         except PlaywrightError as exc:
             raise ToolError(f"element '{ref.id}' is no longer on the page") from exc
         info = ref.info
-        if (live.get("name") or "") != (info.get("name") or ""):
-            raise ToolError(f"element '{ref.id}' changed on the page (its label is now {live.get('name')!r})")
+        # The handle is the element captured at observe time, so a label that changes (a button turning into "Saving...")
+        # is still the same element. The policy below judges the label the element has now.
         if "type" in info and (live.get("type") or "") != (info.get("type") or ""):
             raise ToolError(f"element '{ref.id}' changed type on the page")
         if act:
