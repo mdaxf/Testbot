@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+import os
+import signal
+import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -49,6 +52,8 @@ def _worker_main(runner: Callable[..., dict], args_dict: dict[str, Any], load: L
     """One worker process: wait for its ramp-up slot, then repeat the run until the limits are reached."""
     from framework import logs
 
+    if os.name != "nt":                   # stop() sends SIGTERM: unwind normally, so Playwright closes the browser it started
+        signal.signal(signal.SIGTERM, _exit_on_sigterm)
     logs.configure()                      # a worker is a new process: logging comes from the environment (TESTBOT_LOG_LEVEL ...)
     logs.set_tag(f"w{worker_id:02d}")
     try:
@@ -72,14 +77,29 @@ def _worker_main(runner: Callable[..., dict], args_dict: dict[str, Any], load: L
         out.put({"type": "done", "worker": worker_id})
 
 
+def _exit_on_sigterm(signum, _frame) -> None:
+    raise SystemExit(128 + signum)
+
+
+def _stop_tree(proc: multiprocessing.Process, force: bool) -> None:
+    """Stop the worker. On Windows taskkill /T also ends the Playwright driver and browser it started; on POSIX SIGTERM
+    lets the worker unwind (see _exit_on_sigterm) so Playwright closes them, and SIGKILL is the last resort."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, check=False)
+    elif force:
+        proc.kill()
+    else:
+        proc.terminate()
+
+
 def _stop_worker(proc: multiprocessing.Process, join_s: float) -> None:
     proc.join(timeout=join_s)
     if not proc.is_alive():
         return
-    proc.terminate()
+    _stop_tree(proc, force=False)
     proc.join(timeout=5)
     if proc.is_alive():
-        proc.kill()
+        _stop_tree(proc, force=True)
         proc.join(timeout=5)
 
 
@@ -106,21 +126,26 @@ def run_load(runner: Callable[..., dict], args_dict: dict[str, Any], load: LoadS
     # A duration limit has to stop a worker that never returns from one iteration. Without duration_s there is
     # no known bound, so the parent keeps waiting for that worker.
     deadline = (started + float(load.duration_s) + stop_grace_s) if load.duration_s is not None else None
-    while done < n:
-        if deadline is not None and time.monotonic() >= deadline:
-            break
-        try:
-            msg = queue.get(timeout=1.0)
-        except Exception:  # queue.Empty -- also notice workers that died without saying goodbye
-            if all(not p.is_alive() for p in procs) and queue.empty():
+    try:
+        while done < n:
+            if deadline is not None and time.monotonic() >= deadline:
                 break
-            continue
-        if msg["type"] == "done":
-            done += 1
-            continue
-        results.append(msg)
-        log(f"  [worker {msg['worker']:02d} iter {msg['iteration']:03d}] {msg['status'].upper():5s} {msg['seconds']:6.1f}s"
-            + (f"  {msg['error'][:120]}" if msg.get("error") else ""))
+            try:
+                msg = queue.get(timeout=1.0)
+            except Exception:  # queue.Empty -- also notice workers that died without saying goodbye
+                if all(not p.is_alive() for p in procs) and queue.empty():
+                    break
+                continue
+            if msg["type"] == "done":
+                done += 1
+                continue
+            results.append(msg)
+            log(f"  [worker {msg['worker']:02d} iter {msg['iteration']:03d}] {msg['status'].upper():5s} {msg['seconds']:6.1f}s"
+                + (f"  {msg['error'][:120]}" if msg.get("error") else ""))
+    except BaseException:                 # Ctrl+C or a crash in the parent: do not leave workers (and their browsers) running
+        for p in procs:
+            _stop_worker(p, 0.0)
+        raise
     grace = 0.0 if deadline is not None and time.monotonic() >= deadline else 30.0
     for p in procs:
         _stop_worker(p, grace)

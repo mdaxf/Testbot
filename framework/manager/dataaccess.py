@@ -25,9 +25,14 @@ _FORBIDDEN = re.compile(
 )
 # Routines and lock hints that a SELECT can still use to write, read server files, or stall the database.
 # Names are matched only outside strings and comments (see _code_only). A read-only login remains the real control.
+# Also server-control, session-setting, sequence, lock and delay functions: they change state that a rollback does not undo
+# (or stall the server) even inside a SELECT.
 _DANGEROUS = re.compile(
-    r"\b(utl_\w+|dbms_\w+|dblink\w*|pg_(?:read_file|read_binary_file|ls_dir|sleep)|"
-    r"lo_(?:import|export|from_bytea)|tablockx|tablock|updlock|holdlock|xlock)\b",
+    r"\b(utl_\w+|dbms_\w+|dblink\w*|pg_(?:read_file|read_binary_file|ls_dir|sleep\w*)|"
+    r"lo_(?:import|export|from_bytea|unlink|create|creat|open|put|truncate)|tablockx|tablock|updlock|holdlock|xlock|"
+    r"pg_(?:terminate_backend|cancel_backend|reload_conf|rotate_logfile|promote|switch_wal|create_restore_point)|"
+    r"pg_(?:try_)?advisory\w*|set_config|nextval|setval|sleep|benchmark|get_lock|release_lock|load_file|"
+    r"next\s+value\s+for)\b",
     re.I,
 )
 MAX_ROWS = 25
@@ -161,6 +166,18 @@ def find_stored_connection(envs: dict[str, Any], masked: str, env_name: str = ""
         if isinstance(cs, str) and mask_connection(cs) == masked:
             return cs
     raise ValueError("the connection string has a hidden password (***): type the password again, or save the environment first")
+
+
+def connection_for_try(envs: dict[str, Any], cs: str, env_name: str = "", conn_name: str = "") -> str:
+    """The connection string the "Try" dialog may open. A masked password is put back only for the matching stored string
+    (find_stored_connection). An {env:TESTBOT_DB_*} password is read only for a string saved in an environment exactly as
+    sent, so a request cannot point a stored password at another server."""
+    cs = find_stored_connection(envs, cs, env_name, conn_name)
+    if connstr.has_env_ref(cs):
+        saved = {c for env in envs.values() if isinstance(env, dict) for c in (env.get("connections") or {}).values() if isinstance(c, str)}
+        if cs not in saved:
+            raise ValueError("a connection string that is not saved cannot use {env:...}: save it in an environment first, or type the password")
+    return cs
 
 
 def write_environments(ws: Workspace, envs: dict[str, Any]) -> None:

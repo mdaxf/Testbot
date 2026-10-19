@@ -23,9 +23,9 @@ def test_mask_and_unmask():
 
 
 def test_password_with_spaces_around_equals_is_masked():
-    spaced = "Server=s;PWD = hunter2;Encrypt=yes;"
+    spaced = "Server=s;PWD = fixture-pw;Encrypt=yes;"
     masked = connstr.mask(spaced)
-    assert "hunter2" not in masked and connstr.is_masked(masked)
+    assert "fixture-pw" not in masked and connstr.is_masked(masked)
     assert connstr.unmask(masked, spaced) == spaced
     assert connstr.mask("Password = {env:TESTBOT_DB_X};") == "Password = {env:TESTBOT_DB_X};"
     assert connstr.is_masked(spaced) is False

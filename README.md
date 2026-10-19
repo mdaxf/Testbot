@@ -105,6 +105,8 @@ qa:
   of defence. The real control is a login that can only read (for SQL Server: a user in `db_datareader` only, no
   `db_owner`/`sysadmin`, no linked servers). Give the agent its own connection with such a login whenever the test
   database matters. `sql_exec` steps need write rights; keep them on a separate connection name.
+  The "Try" dialog reads an `{env:...}` password only for a connection string saved in an environment, never for one
+  typed in the dialog.
 - **Variables in SQL are bound parameters.** `{name}` in a `query` is sent to the database as a parameter, not pasted
   into the text: `'{OrderNo}'`, `'ORD-{n}'` and `WHERE Id = {id}` all work as before, and a value such as `O'Brien`
   can no longer break (or change) the statement. A plain number is still written inline (so `TOP {n}` works). To build

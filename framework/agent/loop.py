@@ -62,7 +62,7 @@ class AgentRun:
         self.policy = Policy(cfg, profile, [start_url, base_url], objective + " " + data_hints, self.constraints)
         self.watch = PageWatch(page, profile)
         self.watch.host = ""
-        self.observer = Observer(page, profile, self.watch, self.secrets)
+        self.observer = Observer(page, profile, self.watch, self.secrets, url_problem=self.policy.check_navigation)
         self.executor = ToolExecutor(page, self.observer, self.watch, self.policy, ctx, sql_conns, cfg, profile, base_url, self.secrets, shot)
         self.messages: list[Message] = []
 
@@ -90,6 +90,8 @@ class AgentRun:
         return "\n\n".join(parts)
 
     def _screenshot(self) -> Optional[bytes]:
+        if self.executor.location_problem():          # a page from a disallowed site is never shown to the model
+            return None
         try:
             return branding.screenshot(self.page)
         except Exception:  # noqa: BLE001

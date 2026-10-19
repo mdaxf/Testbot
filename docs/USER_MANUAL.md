@@ -1706,7 +1706,7 @@ Review it, copy it into your test cases folder and run it in script mode (`--mod
 
 | Risk | Protection |
 |---|---|
-| Wandering off to other sites | Only the test's own site (its `base_url` / `start_url` host) is allowed; other addresses are refused. Add hosts with `TESTBOT_AGENT_ALLOWED_HOSTS`. |
+| Wandering off to other sites | Only the test's own site (its `base_url` / `start_url` host) is allowed; other addresses are refused. The page (and any pop-up) is checked before and after every action: on another site nothing is clicked or typed, pop-ups there are closed, the page is taken back, and that page is never shown to the model. Frames from other sites are not listed. Add hosts (for example a single sign-on login page) with `TESTBOT_AGENT_ALLOWED_HOSTS`. |
 | Destructive actions | Clicking something that looks like delete / remove / pay / send / approve… is refused unless the **objective asks for it** and no constraint forbids it (or `TESTBOT_AGENT_ALLOW_DESTRUCTIVE=1`). |
 | Changing data through SQL | The agent can only `SELECT`. |
 | Secrets | Typed only as `{variable}` references; literal passwords are refused; values are hidden from the model, the report and the generated script. |
