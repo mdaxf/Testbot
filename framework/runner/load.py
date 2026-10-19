@@ -146,6 +146,13 @@ def run_load(runner: Callable[..., dict], args_dict: dict[str, Any], load: LoadS
         for p in procs:
             _stop_worker(p, 0.0)
         raise
+    while True:                           # results queued before the loop stopped (deadline, early exit) still count
+        try:
+            msg = queue.get_nowait()
+        except Exception:  # queue.Empty
+            break
+        if msg["type"] == "iteration":
+            results.append(msg)
     grace = 0.0 if deadline is not None and time.monotonic() >= deadline else 30.0
     for p in procs:
         _stop_worker(p, grace)

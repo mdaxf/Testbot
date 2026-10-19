@@ -83,6 +83,16 @@ def _code_only(query: str) -> str:
     return "".join(out)
 
 
+def _first_forbidden(code: str):
+    """First forbidden word that is used as a keyword. `t.Save` (qualified column) and `AS Save` (alias) are names, not statements."""
+    for m in _FORBIDDEN.finditer(code):
+        before = code[:m.start()].rstrip()
+        if code[m.start() - 1:m.start()] == "." or re.search(r"\bas$", before, re.I):
+            continue
+        return m
+    return None
+
+
 def check_select_only(query: str) -> str:
     """Refuse anything but one read-only SELECT (or WITH ... SELECT). Returns the query to run."""
     q = (query or "").strip().rstrip(";").strip()
@@ -93,9 +103,9 @@ def check_select_only(query: str) -> str:
         raise ValueError("only a single statement is allowed")
     if not re.match(r"^(select|with)\b", code, re.I):
         raise ValueError("only SELECT queries can be tried here")
-    found = _FORBIDDEN.search(code) or _DANGEROUS.search(code)
+    found = _first_forbidden(code) or _DANGEROUS.search(code)
     if found:
-        raise ValueError(f"'{found.group(1)}' is not allowed in a try-out query (read-only)")
+        raise ValueError(f"'{found.group(1)}' is not allowed in a try-out query (read-only). Quote a column with that name, e.g. [{found.group(1)}]")
     return q
 
 
