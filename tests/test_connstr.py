@@ -6,12 +6,12 @@ import yaml
 from framework import connstr
 from framework.manager import dataaccess
 
-CS = "Driver={ODBC Driver 18 for SQL Server};Server=s;UID=u;PWD=p@ss;Encrypt=yes;"
+CS = "Driver={ODBC Driver 18 for SQL Server};Server=s;UID=u;PWD=fixture-pw;Encrypt=yes;"
 
 
 def test_mask_and_unmask():
     m = connstr.mask(CS)
-    assert "p@ss" not in m and "PWD=***" in m
+    assert "fixture-pw" not in m and "PWD=***" in m
     assert connstr.mask("Server=s;Trusted_Connection=yes;") == "Server=s;Trusted_Connection=yes;"
     assert connstr.mask("PWD={a;b}};x};Server=s") == "PWD=***;Server=s"
     assert connstr.mask("PWD={env:TESTBOT_DB_X};") == "PWD={env:TESTBOT_DB_X};"
@@ -52,7 +52,7 @@ def test_expand_only_testbot_db_variables():
 def test_environments_are_masked_and_saving_keeps_the_password(ws):
     dataaccess.write_environments(ws, {"qa": {"base_url": "x", "connections": {"default": CS}}})
     shown = dataaccess.masked_environments(dataaccess.read_environments(ws))
-    assert "p@ss" not in str(shown)
+    assert "fixture-pw" not in str(shown)
     dataaccess.write_environments(ws, shown)                       # the browser sends back what it got
     assert dataaccess.read_environments(ws)["qa"]["connections"]["default"] == CS
     shown["prod"] = shown.pop("qa")                                # renamed in the UI

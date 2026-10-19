@@ -105,11 +105,11 @@ def test_run_select_uses_a_transaction_that_is_rolled_back(monkeypatch):
         return conn
 
     monkeypatch.setitem(sys.modules, "pyodbc", types.SimpleNamespace(connect=connect))
-    monkeypatch.setenv("TESTBOT_DB_PW", "s3cret")
+    monkeypatch.setenv("TESTBOT_DB_PW", "fixture-pw")
     out = dataaccess.run_select("Driver=x;PWD={env:TESTBOT_DB_PW};", "SELECT 1 AS a")
     assert out["columns"] == ["a"]
     assert calls["autocommit"] is False
-    assert calls["cs"] == "Driver=x;PWD=s3cret;"
+    assert calls["cs"] == "Driver=x;PWD=fixture-pw;"
     assert conn.rolled_back and conn.closed
 
 
