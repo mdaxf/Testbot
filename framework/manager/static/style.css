@@ -9,8 +9,8 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.45 var(--font); }
-#app { display: flex; min-height: 100vh; }
-#nav { width: 210px; background: var(--brand); color: #fff; padding: 14px 10px; flex: none; display: flex; flex-direction: column; }
+#app { display: flex; height: 100vh; overflow: hidden; }     /* the menu and the page scroll on their own, so a tall page never scrolls the menu away */
+#nav { width: 210px; background: var(--brand); color: #fff; padding: 14px 10px; flex: none; display: flex; flex-direction: column; overflow-y: auto; }
 .brand { font-size: 20px; font-weight: 600; padding: 4px 8px 14px; } .brand span { font-weight: 300; opacity: .8; }
 #navlinks a { display: block; color: #e8f2fa; text-decoration: none; padding: 8px 10px; border-radius: var(--radius); margin: 2px 0; }
 #navlinks a:hover { background: rgba(255,255,255,.12); } #navlinks a.active { background: rgba(255,255,255,.22); font-weight: 600; }
@@ -18,7 +18,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
 #brandfoot b { letter-spacing: .04em; } #brandfoot:hover { opacity: 1; text-decoration: underline; }
 #pills { margin-top: auto; font-size: 12px; } #pills div { padding: 3px 8px; opacity: .95; } .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #999; }
 .dot.ok { background: #5ee08a; } .dot.bad { background: #ff8a80; }
-#main { flex: 1; padding: 18px 24px 40px; min-width: 0; }
+#main { flex: 1; padding: 18px 24px 40px; min-width: 0; overflow-y: auto; }
 h1 { font-size: 22px; margin: 0 0 14px; } h2 { font-size: 16px; margin: 20px 0 8px; } h3 { font-size: 14px; margin: 14px 0 6px; }
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; } .toolbar .grow { flex: 1; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 14px; }

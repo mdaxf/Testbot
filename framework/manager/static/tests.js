@@ -290,7 +290,8 @@ function stepsTab(body) {
   body.append(split);
   const fit = () => {                    // the case list and the editor scroll on their own: the pair is as tall as the window below its header
     if (!split.isConnected) { window.removeEventListener("resize", fit); return; }
-    split.style.height = Math.max(240, window.innerHeight - (split.getBoundingClientRect().top + window.scrollY) - 44) + "px";
+    const pane = document.getElementById("main"), offset = split.getBoundingClientRect().top - pane.getBoundingClientRect().top + pane.scrollTop;
+    split.style.height = Math.max(240, pane.clientHeight - offset - 44) + "px";
   };
   fit(); window.addEventListener("resize", fit);
 
