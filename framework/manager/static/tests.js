@@ -286,7 +286,13 @@ function stepsTab(body) {
     h("div", { class: "toolbar" }, h("h2", { style: { margin: 0 } }, "Steps"), h("span", { class: "grow" }),
       h("button", { class: "primary", onclick: () => { c.steps.push(newStep()); renumber(c); E.si = c.steps.length - 1; mark(); drawSteps(); } }, "+ Add step")),
     stepsBox, h("div", { id: "problem-list", class: "problems" }));
-  body.append(h("div", { class: "split" }, side, main));
+  const split = h("div", { class: "split fit" }, side, main);
+  body.append(split);
+  const fit = () => {                    // the case list and the editor scroll on their own: the pair is as tall as the window below its header
+    if (!split.isConnected) { window.removeEventListener("resize", fit); return; }
+    split.style.height = Math.max(240, window.innerHeight - (split.getBoundingClientRect().top + window.scrollY) - 44) + "px";
+  };
+  fit(); window.addEventListener("resize", fit);
 
   function drawSteps() {
     clear(stepsBox);

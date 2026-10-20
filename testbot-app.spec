@@ -48,3 +48,26 @@ for a, name, desc, console in (
     parts += [a.binaries, a.datas]
 
 coll = COLLECT(*exes, *parts, strip=False, upx=False, upx_exclude=[], name="testbot")
+
+
+# ---- sample configuration and docs, placed NEXT TO the exes (the programs read config/ and .env beside themselves; datas would
+# ---- end up inside _internal/). Existing files in the output folder are never replaced, so re-building over a working copy keeps its settings.
+import shutil
+
+_out = os.path.join(DISTPATH, "testbot")
+for _src, _dst in (
+    ("config", "config"),                                   # environments.yaml, apriso_control_map.yaml, app_profile_apriso.yaml
+    (".env.example", ".env.example"),                       # every setting; copy to .env
+    ("test_cases/examples", "test_cases/examples"),
+    ("test_cases/ad_demo", "test_cases/ad_demo"),
+    ("docs/USER_MANUAL.md", "USER_MANUAL.md"),
+    ("docs/AGENTIC_TESTING_RESEARCH.md", "AGENTIC_TESTING_RESEARCH.md"),
+    ("README.md", "README.md"),
+):
+    _s, _d = os.path.join(SPECPATH, _src), os.path.join(_out, _dst)
+    if os.path.isdir(_s):
+        shutil.copytree(_s, _d, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+    elif os.path.isfile(_s):
+        os.makedirs(os.path.dirname(_d), exist_ok=True)
+        if not os.path.exists(_d):
+            shutil.copy2(_s, _d)
